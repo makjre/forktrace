@@ -126,7 +126,11 @@ void execReaper(pid_t child, int pipeToTracer) {
         }
         close(pipeToTracer);
 
+        // First try executing using the path.
         execlp("reaper", "reaper", 0);
+        // If here, we failed. Try current directory instead.
+        execlp("./reaper", "reaper", 0);
+        // If here, we failed twice. Give up.
         throw system_error(errno, generic_category(), "execl");
         /* NOTREACHED */
     } catch (const exception& e) {
