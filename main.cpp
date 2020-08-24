@@ -236,11 +236,13 @@ void draw(const Process& tree) {
     }
 
     if (!diagram.result().print()) {
-        cout << Colour::RED
-            << "The diagram could not fit within the screen width."
-            << Colour::RESET << endl;
-        cout << Colour::BOLD << "note: " << Colour::RESET
-            << "Consider trying the scrollable TUI view instead." << endl;
+        const char* error 
+                = "The diagram could not fit within the screen width.";
+        const char* note
+                = "Consider trying the scrollable TUI view instead.";
+        
+        cout << colourise(error, Colour::RED) << endl;
+        cout << colourise("note: ", Colour::BOLD) << note << endl;
     }
 
     if (diagram.truncated()) {
@@ -441,6 +443,7 @@ void restart(Tracer& tracer, shared_ptr<Process>& tree) {
     tree = tracer.start(args);
 }
 
+/* Return a string describing the currently selected event on the diagram. */
 string getEventLine(const Event* selected) {
     if (!selected) {
         return "";
@@ -453,6 +456,7 @@ string getEventLine(const Event* selected) {
     return oss.str();
 }
 
+/* Return a string describing the currently selected process on the diagram. */
 string getProcessLine(const Process* selected, int eventIndex) {
     if (!selected) {
         return "";
@@ -463,6 +467,10 @@ string getProcessLine(const Process* selected, int eventIndex) {
     return oss.str();
 }
 
+/* Take a key press and figure out the new position (in terms of line and lane
+ * coordinates) for the cursor on the diagram. Will handle clipping at edges of
+ * the diagram. Returns true if the new values of lane and line were changed
+ * from what they previous were (and modifies them correspondingly). */
 bool updateDiagramLocation(const Diagram& diagram, int key, size_t& lane, 
         size_t& line) 
 {
@@ -571,7 +579,7 @@ void doScrollView(Tracer& tracer, shared_ptr<Process>& tree) {
         "q to quit, n to step, "
         "r to restart, a to re-run";
     setLogEnabled(false);
-    ScrollView view(diagram->result(), move(help), onKeyPress, 5);
+    ScrollView view(diagram->result(), move(help), onKeyPress);
     view.setLine(getProcessLine(process, eventIndex), 0);
     view.setLine(getEventLine(selected), 1);
     view.setCursor(x, y); // make the cursor point to that location
@@ -595,6 +603,15 @@ void doFastDiagram(Tracer& tracer, shared_ptr<Process>& tree,
             hideNonFatalSignals = true;
             printKey();
             draw(*tree.get());
+
+            const char* notes[] =
+                {"To access the command-line, re-run me with no arguments.",
+                "You'll be able get the scrollable view with these commands:\n"
+                "\trun <program> [args...]\n"
+                "\tview\n"
+                "You can also type 'help' to get a full list of commands."};
+            cout << colourise("note: ", Colour::BOLD) << notes[0] << endl;
+            cout << colourise("note: ", Colour::BOLD) << notes[1] << endl;
         }
     } catch (const exception& e) {
         cout << Colour::RED_BOLD << "error: " << Colour::RESET 

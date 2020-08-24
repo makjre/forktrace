@@ -76,7 +76,9 @@ public:
 };
 
 /* A scrollable curses view that enables the user to scroll around the diagram
- * and inspect certain nodes. The view allows two lines of info at the top. */
+ * and inspect certain nodes. The view allows two lines of info at the top. 
+ * Note that coordinates work by: (0,0) at top-left, then x increases to the
+ * right and y increases downwards. */
 class ScrollView {
 public:
     /* The key constant passed to this callback is the same value returned by
@@ -87,11 +89,8 @@ private:
     WINDOW* _pad;
     size_t _padWidth;
     size_t _padHeight;
-    size_t _padX; // x offset of pad onto screen
-    size_t _padY; // y offset of pad onto screen
-    size_t _cursorX; // x position of cursor
-    size_t _cursorY; // y position of cursor
-    size_t _scrollMargin;
+    size_t _cursorX; // x position of cursor (relative to the pad, not screen)
+    size_t _cursorY; // y position of cursor (relative to the pad, not screen)
     bool _running; // set to false when we want to quit.
     std::string _lines[2];
     std::string _helpMessage;
@@ -102,25 +101,22 @@ private:
     void cleanup();
 
 public:
-    /* scrollMargin describes how close to the edge of the terminal window the
-     * cursor can get before forcing the view to recenter. If the margin is
-     * larger than the relevant dimension of the window, then the window is
-     * just centered along that axis. */ 
     ScrollView(const Window& window, std::string helpMessage, 
-            KeyCallback onKey, size_t scrollMargin);
+            KeyCallback onKey);
     ~ScrollView() { cleanup(); }
 
-    /* Supports line 0 and line 1. Otherwise an assertion fails. */
+    /* Allows the caller to set the messages stored at the two lines of text
+     * at the top of the window. asserts that y == 0 || y == 1. */
     void setLine(std::string_view line, size_t y);
 
     /* Highlights a position on the provided input window. An assertion will
      * fail if the coordinates are outside the range of `window`. */
     void setCursor(size_t x, size_t y);
 
-    void quit() { _running = false; }
-    void beep();
-    void update(const Window& window);
-    void run();
+    void quit() { _running = false; }   // Call from within onKeyPress handler.
+    void beep();                        // Get terminal to make a beep noise.
+    void update(const Window& window);  // Change the stuff being displayed.
+    void run();                         // Brings up the view.
 };
 
 /* Reverse any modifications that might have been done on the terminal. This 

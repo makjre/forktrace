@@ -207,9 +207,78 @@ void ScrollView::drawWindow(bool resized) {
             clrtoeol();
         }
     }
+    
+    // Calculate the pad offset so that it is centered in the middle. The pad
+    // offset is the coordinates on the pad which will correspond to the top
+    // left corner of the section of the screen that we draw it on.
+    size_t padOffsetX = 0, padOffsetY = 0;
+    if (_cursorX > (width / 2)) {
+        padOffsetX = _cursorX - (width / 2);
+    }
+    if (_cursorY > (height / 2)) {
+        padOffsetY = _cursorY - (height / 2);
+    }
 
-    prefresh(_pad, _padY, _padX, 2, 0, height - 4, width - 1);
-    move(_cursorY, _cursorX);
+    // Calculate the screen area available for the pad, as well as the coords
+    // where we'll draw the pad. We need to account for the rows of info text.
+    size_t padPosX = 0;
+    size_t padPosY = 2; // 2 lines at top
+    size_t availableWidth = width;
+    size_t availableHeight = height - 3; // 2 lines at top, 1 at bottom
+
+    // Calculate how many rows/columns are visible off the edge of the pad.
+    // (which we'll call the "overhang").We'll need to clear these ourselves 
+    // since drawing the pad won't do it (since the pad doesn't extend to 
+    // those rows/columns).
+    //
+    // We'll zero out the overhang in two segments (if they exist) by looping
+    // through each line and clearing to the end of the line. The two sections
+    // (labelled BOTTOM and RIGHT) are illustrated in the below diagram:
+    //
+    //  +---------------------------------------------------+------------+
+    //  |                                                   |            |
+    //  |                                                   |            |
+    //  |                                                   |            |
+    //  |                                                   |   RIGHT    |
+    //  |                                                   |  OVERHANG  |
+    //  |                   PAD AREA                        |            |
+    //  |                                                   |            |
+    //  |                                                   |            |
+    //  |                                                   |            |
+    //  |                                                   |            |
+    //  +---------------------------------------------------+------------+
+    //  |                                                                |
+    //  |                                                                |
+    //  |                      BOTTOM OVERHANG                           |
+    //  |                                                                |
+    //  +----------------------------------------------------------------+
+    //
+    // Just remember - these overhang sections are only visible if the diagram
+    // is scrolled far enough to the right or bottom edges.
+
+    // Calculate the overhang.
+    size_t overhangX = max(0UL, padOffsetX + availableWidth - _padWidth);
+    size_t overhangY = max(0UL, padOffsetY + availableHeight - _padHeight);
+    // Zero out the BOTTOM section.
+    for (size_t y = padPosY + availableHeight - overhangY; 
+            y < padPosY + availableHeight; ++y) {
+        move(y, 0);
+        clrtoeol();
+    }
+    // Zero out the RIGHT section.
+    if (overhangX > 0) {
+        for (size_t y = padPosY; 
+                y < padPosY + availableHeight - overhangY; ++y) {
+            move(y, padPosX + availableWidth - overhangX);
+            clrtoeol();
+        }
+    }
+
+    // Redraw the pad on the screen with the updated offset etc.
+    prefresh(_pad, padOffsetY, padOffsetX, padPosY, padPosX, 
+            availableHeight - 1, availableWidth - 1);
+    // Set cursor position (relative to terminal screen).
+    move(_cursorY + padPosY - padOffsetY, _cursorX + padPosX - padOffsetX);
 }
 
 void ScrollView::run() {
@@ -275,10 +344,9 @@ void ScrollView::cleanup() {
 }
 
 ScrollView::ScrollView(const Window& image, string helpMessage, 
-        KeyCallback onKey, size_t margin) 
-    : _pad(nullptr), _padWidth(0), _padHeight(0), _padX(0), _padY(0), 
-    _cursorX(0), _cursorY(0), _scrollMargin(margin), _running(true), 
-    _helpMessage(helpMessage), _keyHandler(onKey)
+        KeyCallback onKey) 
+    : _pad(nullptr), _padWidth(0), _padHeight(0), _cursorX(0), _cursorY(0), 
+    _running(true), _helpMessage(helpMessage), _keyHandler(onKey)
 {
     initscr();
     cbreak();
@@ -315,14 +383,8 @@ void ScrollView::setLine(string_view line, size_t y) {
 
 void ScrollView::setCursor(size_t x, size_t y) {
     assert(x < _padWidth && y < _padHeight);
-    
-    // Calculate the pad offset so that it is centered in the middle.
-    _padX = 0;
-    _padY = 0; // TODO
-
-    // Calculate the coordinates of the cursor
-    _cursorX = x; // TODO
-    _cursorY = y + 2;
+    _cursorX = x;
+    _cursorY = y;
 }
 
 void ScrollView::beep() {
