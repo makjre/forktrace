@@ -25,7 +25,8 @@ void setLogEnabled(bool enabled);
 /* Strips all leading and trailing whitespace from the specified string. */
 void strip(std::string& str);
 
-/* An adapter that reverses a container for use with range-based for loops. */
+/* An adapter that reverses a container for use with range-based for loops.
+ * Basically an attempt to emulate python's reversed() with C++ templates! */
 template <class Container>
 class ReverseIterator {
 private:

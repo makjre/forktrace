@@ -22,7 +22,8 @@ enum class Colour : uint8_t {
 };
 
 /* Just translates the colour into its ANSI escape sequence. If colour is
- * disabled this does nothing. */
+ * disabled this does nothing. Generally will prefer to just use the colourise
+ * function since you don't have to type out Colour::RESET all the time. */
 std::ostream& operator<<(std::ostream& os, Colour c);
 
 /* Encloses the string in ANSI escape sequences to give it the desired colour

@@ -12,7 +12,7 @@
 class Process; // defined in process.h
 
 /* An object that draws events onto the diagram. Only used in diagram.cpp (only
- * in header file cuz 'incomplete type'). */
+ * in header file cuz muh 'incomplete type'). */
 class Drawer : public IEventRenderer {
 private:
     size_t _laneWidth; // columns per each lane
@@ -111,7 +111,7 @@ private:
      * lane number, since there may be jumps).
      *
      * TODO make sure to be careful with having references to Nodes from this 
-     * vector. */
+     * vector (they'll be invalidated if vector resized etc.). */
     std::vector<std::vector<Node>> _lines;
 
     int getNextEvent(const Process& process, int start);

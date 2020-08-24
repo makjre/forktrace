@@ -89,7 +89,7 @@ public:
     Tracer(Tracer&&) = delete;
 
     /**************************************************************************
-     * FOR TRACEES
+     * FOR TRACEES (i.e., Tracee objects being managed by us)
      *************************************************************************/
 
     /* Add a process to the list of active processes. This causes an exception
@@ -115,7 +115,7 @@ public:
     int getHaltSignal() const { return SIGTRAP; } // signal used to halt
 
     /**************************************************************************
-     * FOR USERS
+     * FOR USERS (anyone who isn't a Tracee object)
      *************************************************************************/
 
     /* Start a tracee from command line arguments. This will be done via the

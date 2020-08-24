@@ -41,7 +41,7 @@ static bool hideNonFatalSignals = true;
 static bool printDiagramDebug = false;
 
 /* Command line prompt */
-static const char* PROMPT = ">> ";
+static string_view PROMPT = ">> ";
 
 void handler(int sig, siginfo_t* info, void* ucontext) {
     restoreTerminal();
@@ -246,9 +246,8 @@ void draw(const Process& tree) {
     }
 
     if (diagram.truncated()) {
-        cout << Colour::RED 
-            << "The diagram's lane width was too small." 
-            << Colour::RESET << endl;
+        const char* error = "The diagram's lane width was too small.";
+        cout << colourise(error, Colour::RED) << endl; 
     }
 }
 
@@ -312,47 +311,24 @@ void tryGo(Tracer& tracer) {
 }
 
 void printKey() {
-    cout << Colour::BOLD << "~~~~~~~~~~~~~ KEY ~~~~~~~~~~~~~" 
-        << Colour::RESET << endl;
-
-    cout << EXEC_COLOUR << " E " << Colour::RESET 
-        << " successful exec" << endl;
-
-    cout << BAD_EXEC_COLOUR << " E " << Colour::RESET 
-        << " failed exec" << endl;
-
-    cout << SIGNAL_COLOUR << " x " << Colour::RESET
-        << " received a signal" << endl;
-
-    cout << SIGNAL_SEND_COLOUR << " x " << Colour::RESET
-        << " called kill/tgkill/tkill" << endl;
-
-    cout << Colour::BOLD << "i-- waited for specific child"
-        << Colour::RESET << endl;
-
-    cout << Colour::BOLD << "w-- waited for any child"
-        << Colour::RESET << endl;
-
-    cout << Colour::BOLD << "g-- waited for child in group"
-        << Colour::RESET << endl;
-
-    cout << BAD_WAIT_COLOUR << " w " << Colour::RESET
-        << " failed wait (i, w, or g)" << endl;
-
-    cout << EXITED_COLOUR << "--- reaped, exited"
-        << Colour::RESET << endl;
-
-    cout << '(' << EXITED_COLOUR << 'x' << Colour::RESET << ") "
-        << EXITED_COLOUR << "orphaned, exited" << Colour::RESET << endl;
-
-    cout << KILLED_COLOUR << "~~~ reaped, signaled" 
-        << Colour::RESET << endl;
-
-    cout << '[' << KILLED_COLOUR << 'x' << Colour::RESET << "] "
-        << KILLED_COLOUR << "orphaned, signaled" << Colour::RESET << endl;
-
-    cout << Colour::BOLD << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-        << Colour::RESET << endl;
+    cout << colourise("~~~~~~~~~~~~~ KEY ~~~~~~~~~~~~~", Colour::BOLD) << endl;
+    cout << colourise(" E ", EXEC_COLOUR) << " successful exec" << endl;
+    cout << colourise(" E ", BAD_EXEC_COLOUR) << " failed exec" << endl;
+    cout << colourise(" x ", SIGNAL_COLOUR) << " received a signal" << endl;
+    cout << colourise(" x ", SIGNAL_SEND_COLOUR) 
+            << " called kill/tgkill/tkill" << endl;
+    cout << colourise("i-- waited for specific child", Colour::BOLD) << endl;
+    cout << colourise("w-- waited for any child", Colour::BOLD) << endl;
+    cout << colourise("g-- waited for child in group", Colour::BOLD) << endl;
+    cout << colourise(" w ", BAD_WAIT_COLOUR) 
+            << " failed wait (i, w, or g)" << endl;
+    cout << colourise("--- reaped, exited", EXITED_COLOUR) << endl;
+    cout << "(" << colourise("x", EXITED_COLOUR) << ")" 
+            << " orphaned, exited" << endl;
+    cout << colourise("~~~ reaped, signaled", KILLED_COLOUR) << endl;
+    cout << "[" << colourise("x", KILLED_COLOUR) << "]"
+            << " orphaned, signaled" << endl;
+    cout << colourise("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~", Colour::BOLD) << endl;
 }
 
 bool tryQuit(const Tracer& tracer, bool dueToEOF) {
@@ -508,9 +484,8 @@ void doScrollView(Tracer& tracer, shared_ptr<Process>& tree) {
     auto diagram = make_unique<Diagram>(*tree.get(), opts);
 
     if (diagram->truncated()) {
-        cout << Colour::RED 
-            << "The diagram's lane width was too small." 
-            << Colour::RESET << endl;
+        const char* error = "The diagram's lane width was too small.";
+        cout << colourise(error, Colour::RED) << endl;
 
         string dummy; // current mood
         if (!prompt("Press ENTER to continue...", dummy)) {
@@ -614,8 +589,7 @@ void doFastDiagram(Tracer& tracer, shared_ptr<Process>& tree,
             cout << colourise("note: ", Colour::BOLD) << notes[1] << endl;
         }
     } catch (const exception& e) {
-        cout << Colour::RED_BOLD << "error: " << Colour::RESET 
-            << e.what() << endl;
+        cout << colourise("error: ", Colour::RED_BOLD) << e.what() << endl;
     }
 }
 

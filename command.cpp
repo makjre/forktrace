@@ -244,8 +244,7 @@ void commandLoop(string_view thePrompt) {
         } catch (const QuitCommandLoop& e) {
             return;
         } catch (const exception& e) {
-            cout << Colour::RED_BOLD << "error: " 
-                << Colour::RESET << e.what() << endl;
+            cout << colourise("error: ", Colour::RED_BOLD) << e.what() << endl;
         }
 
         if (cmd->autoRepeat) {
