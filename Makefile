@@ -2,6 +2,8 @@ OUTPUTS = example forktrace reaper
 
 # Using C++20 support pretty much just for string::starts_with in command.cpp.
 # Other than that, this uses quite a few features exclusive to C++14 / C++17.
+# Should be pretty easy to get working with C++17 (just write your own version
+# of string::starts_with).
 CXX = g++
 CXXFLAGS = -std=c++2a -g
 LDFLAGS = -pthread -lncurses -lreadline
