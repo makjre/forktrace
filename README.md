@@ -39,9 +39,9 @@ used `LD_PRELOAD` to replace fork etc. with wrappers that generated log
 messages which were converted into a diagram by a Python script. Interestingly,
 this "newer" version actually seems to be slower than the older version by a
 significant amount (the old version was 3x faster on a single test I ran).
-The bottleneck here is that the tracees block on every single system call until
-the tracer can receive the wait notification and unblock the tracee. This
-somewhat serialises the whole process, whereas in the old version, everything
-just chugged along at full speed while the parser script tried to keep up
-with the log messages. Of course, everything else would be faster (the diagram
-rendering, etc.) since it's written in C++ instead of Python.
+I suspect that the bottleneck here is that the tracees block on every single 
+system call until the tracer can receive the wait notification and unblock the 
+tracee. This somewhat serialises the whole process, whereas in the old version,
+everything just chugged along at full speed while the parser script tried to 
+keep up with the log messages. Of course, everything else would be faster (the
+diagram rendering, etc.) since it's written in C++ instead of Python.
