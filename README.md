@@ -35,7 +35,7 @@ intended to be able to be used with any program. Just include it into the files
 where you want those syscalls defined by it to be traced.
 
 This repo is a newer version of github.com/hddharvey/fdiag. The old version
-used `LD\_PRELOAD` to replace fork etc. with wrappers that generated log
+used `LD_PRELOAD` to replace fork etc. with wrappers that generated log
 messages which were converted into a diagram by a Python script. Interestingly,
 this "newer" version actually seems to be slower than the older version by a
 significant amount (the old version was 3x faster on a single test I ran).
