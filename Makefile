@@ -6,7 +6,7 @@ CXX = g++
 CXXFLAGS = -std=c++2a -g
 LDFLAGS = -pthread -lncurses -lreadline
 CC = gcc
-CFLAGS = 
+CFLAGS = -std=gnu99 
 
 # Flags to generate dependency information
 DEPFLAGS = -MMD -MP -MF"$(@:%.o=%.d)"
