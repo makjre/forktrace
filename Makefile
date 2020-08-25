@@ -1,4 +1,4 @@
-OUTPUTS = a.out tracer reaper
+OUTPUTS = example tracer reaper
 
 # Using C++20 support pretty much just for string::starts_with in command.cpp.
 # Other than that, this uses quite a few features exclusive to C++14 / C++17.
@@ -11,7 +11,11 @@ CFLAGS =
 # Flags to generate dependency information
 DEPFLAGS = -MMD -MP -MF"$(@:%.o=%.d)"
 
-SRCS = main.cpp \
+# Where we'll put intermediate files (like .o files and .d files)
+BUILD_DIR = build
+
+# Source files for tracer (.cpp only, we use gcc to generate header deps)
+TRACER_SRCS = main.cpp \
        tracer.cpp \
        system.cpp \
        tracee.cpp \
@@ -22,8 +26,7 @@ SRCS = main.cpp \
        terminal.cpp \
        command.cpp
 
-BUILD_DIR = build
-OBJS = $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(SRCS))
+TRACER_OBJS = $(patsubst %.cpp,$(BUILD_DIR)/tracer/%.o,$(TRACER_SRCS))
 
 .PHONY: all
 all: $(OUTPUTS)
@@ -31,21 +34,38 @@ all: $(OUTPUTS)
 .PHONY: clean
 clean:
 	rm -rf $(OUTPUTS)
-	rm -rf $(BUILD_DIR)/*.o
+	rm -rf $(BUILD_DIR)
 
-$(BUILD_DIR)/%.o: %.cpp | $(BUILD_DIR)
-	$(CXX) -c $(CXXFLAGS) $(DEPFLAGS) $< -o $@
-
-tracer: $(OBJS)
-	$(CXX) $^ $(LDFLAGS) -o $@
-
-reaper: reaper.c
-	$(CC) $(CFLAGS) $^ -o $@
+###############################################################################
+# tracer
+###############################################################################
 
 $(BUILD_DIR):
 	mkdir -p $@
+	mkdir -p $@/tracer
 
-a.out: example.c forktrace.h
+$(BUILD_DIR)/tracer/%.o: src/tracer/%.cpp | $(BUILD_DIR)
+	$(CXX) -c $(CXXFLAGS) $(DEPFLAGS) $< -o $@
+
+tracer: $(TRACER_OBJS)
+	$(CXX) $^ $(LDFLAGS) -o $@
+
+###############################################################################
+# reaper
+###############################################################################
+
+reaper: src/reaper/*.*
+	$(CC) $(CFLAGS) `ls src/reaper/*.c` -o $@
+
+###############################################################################
+# example
+###############################################################################
+
+example: src/example.c src/forktrace.h
 	$(CC) $(CFLAGS) $^ -o $@
 
--include $(wildcard $(BUILD_DIR)/*.d)
+###############################################################################
+# Header dependencies for tracer
+###############################################################################
+
+-include $(wildcard $(BUILD_DIR)/tracer/*.d)

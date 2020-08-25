@@ -25,40 +25,6 @@ there are a few race issues and other dodgy aspects too that I might try to
 resolve in the future if I ever find the time and interest to revisit this.
 For now I'm happy with the progress and proof-of-concept and will leave this.
 
-Source files:
-
-    tracer
-
-        command.cpp
-        command.h
-        diagram.cpp
-        diagram.h
-        event.cpp
-        event.h
-        main.cpp
-        process.cpp
-        process.h
-        syscalls.h
-        system.cpp
-        system.h
-        terminal.cpp
-        terminal.h
-        tracee.cpp
-        tracee.h
-        tracer.cpp
-        tracer.h
-        util.cpp
-        util.h
-
-    reaper
-
-        reaper.c
-
-    example
-
-        example.c
-        forktrace.h
-
 The header file "forktrace.h" used by the example program does some hackery
 so that certain syscalls are redefined so that they provide tracer with source
 line location information. This is done by calling a dummy syscall and giving
