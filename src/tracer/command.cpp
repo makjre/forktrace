@@ -254,13 +254,16 @@ void commandLoop(string_view thePrompt) {
 }
 
 bool parseBool(string_view input) {
-    if (input == "yes" || input == "1" || input == "on" || input == "enabled" 
-            || input == "enable" || input == "true") {
+    string str(input);
+    transform(str.begin(), str.end(), str.begin(), ::tolower);
+
+    if (str == "yes" || str == "1" || str == "on" || str == "enabled" 
+            || str == "enable" || str == "true") {
         return true;
     }
 
-    if (input == "no" || input == "0" || input == "off" || input == "disabled"
-            || input == "disable" || input == "false") {
+    if (str == "no" || str == "0" || str == "off" || str == "disabled"
+            || str == "disable" || str == "false") {
         return false;
     }
 

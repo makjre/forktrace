@@ -1,7 +1,5 @@
 build/
-a.out
 example
-tracer
-reaper
 forktrace
+reaper
 TODO

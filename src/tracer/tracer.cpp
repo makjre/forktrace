@@ -382,7 +382,7 @@ void Tracer::go() {
         if (!_haltSent) {
             resumeTracee(it);
         }
-        removeIfDeadChild(it); // `it` might be modified by this
+        removeIfDeadChild(it); // XXX: TODO xxx? `it` might be modified by this
         collectOrphans(); // iterator invalidated by this
 
         // TODO what if _haltSent set to true at an awkward moment?
