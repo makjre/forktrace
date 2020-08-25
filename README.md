@@ -1,9 +1,9 @@
 This project consists of two programs that work together: tracer and reaper.
 reaper should not be used by the user and is only for internal use by tracer.
-tracer will try to search for reaper in
+The tracer (the program is named forktrace) will try to search for reaper in
 
-    (1) $PATH
-    (2) The working directory
+1. $PATH
+2. The working directory
 
 The reaper is used by the tracer to detect orphaned processes. It configures
 itself as a subreaper process (see the man page for the prctl system call).
@@ -11,14 +11,14 @@ itself as a subreaper process (see the man page for the prctl system call).
 The program can be used to generate the fork diagram resulting from a program
 in one go. E.g., via:
 
-    tracer <program> [args...]
+    forktrace <program> [args...]
 
-If tracer is given no arguments, then it starts up in command line mode. You
+If forktrace is given no arguments, then it starts up in command line mode. You
 can type "help" to see a list of available commands. Features include:
 
-    (1) Being able to run and stop the process tree.
-    (2) Being able to step through one level at a time.
-    (3) Being able to view the diagram in a scrollable curses view.
+1. Being able to run and stop the process tree.
+2. Being able to step through one level at a time.
+3. Being able to view the diagram in a scrollable curses view.
 
 There are some bugs and issues, especially with the scrollable view. I think
 there are a few race issues and other dodgy aspects too that I might try to

@@ -1,4 +1,4 @@
-OUTPUTS = example tracer reaper
+OUTPUTS = example forktrace reaper
 
 # Using C++20 support pretty much just for string::starts_with in command.cpp.
 # Other than that, this uses quite a few features exclusive to C++14 / C++17.
@@ -14,7 +14,7 @@ DEPFLAGS = -MMD -MP -MF"$(@:%.o=%.d)"
 # Where we'll put intermediate files (like .o files and .d files)
 BUILD_DIR = build
 
-# Source files for tracer (.cpp only, we use gcc to generate header deps)
+# Source files for forktrace (.cpp only, we use gcc to generate header deps)
 TRACER_SRCS = main.cpp \
        tracer.cpp \
        system.cpp \
@@ -37,7 +37,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 ###############################################################################
-# tracer
+# forktrace
 ###############################################################################
 
 $(BUILD_DIR):
@@ -47,7 +47,7 @@ $(BUILD_DIR):
 $(BUILD_DIR)/tracer/%.o: src/tracer/%.cpp | $(BUILD_DIR)
 	$(CXX) -c $(CXXFLAGS) $(DEPFLAGS) $< -o $@
 
-tracer: $(TRACER_OBJS)
+forktrace: $(TRACER_OBJS)
 	$(CXX) $^ $(LDFLAGS) -o $@
 
 ###############################################################################
