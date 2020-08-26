@@ -277,7 +277,7 @@ shared_ptr<Process> Tracer::start(const vector<string>& childArgs) {
     argv.reserve(childArgs.size() + 1);
 
     for (size_t i = 0; i < childArgs.size(); ++i) {
-        argv.push_back(childArgs[i].c_str());
+        argv.push_back(childArgs.at(i).c_str());
     }
 
     argv.push_back(nullptr);

@@ -374,7 +374,7 @@ void killCommand(Tracer& tracer, const vector<string>& args) {
     if (args.empty()) {
         tracer.killAll();
     } else if (args.size() == 1) {
-        if (kill(parseNumber<pid_t>(args[0]), SIGKILL) == -1) {
+        if (kill(parseNumber<pid_t>(args.at(0)), SIGKILL) == -1) {
             throw system_error(errno, generic_category(), "kill");
         }
     } else {
@@ -393,7 +393,7 @@ const string& getSingleArg(const vector<string>& args) {
     if (args.size() != 1) {
         throw runtime_error("This command expects 1 argument.");
     }
-    return args[0];
+    return args.at(0);
 }
 
 const Process& getTree(shared_ptr<Process>& tree) {

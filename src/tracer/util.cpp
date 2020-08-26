@@ -10,12 +10,6 @@ using namespace std;
 /* A black hole. */
 ostream null(0);
 
-/* Deez nuts */
-ofstream balls("/home/henry/nutz", ios::ate | ios::app | ios::out);
-
-//#define cout balls
-//#define cerr balls
-
 ostream tlog(cout.rdbuf());
 ostream dbg(null.rdbuf());
 ostream vdbg(null.rdbuf());

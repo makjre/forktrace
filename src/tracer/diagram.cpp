@@ -484,7 +484,7 @@ void Diagram::drawLine(const vector<Node>& line, size_t lineNum) {
  * built and all of the lanes have been allocated. */
 void Diagram::draw() {
     for (size_t i = 0; i < _lines.size(); ++i) {
-        drawLine(_lines[i], i);
+        drawLine(_lines.at(i), i);
     }
 }
 
@@ -497,6 +497,7 @@ Diagram::Diagram(const Process& leader, Options opts)
     // Figure out what nodes go in each line of the diagram
     while (buildNextLine()) { } 
 
+    // Recursively allocates all the paths to a lane
     vector<vector<Path*>> lanes { vector<Path*>() };
     allocateProcessToLane(lanes, _leader);
 
@@ -512,7 +513,7 @@ const Event* Diagram::find(size_t lane, size_t line, const Process*& process,
         return nullptr;
     }
 
-    for (const Node& node : _lines[line]) {
+    for (const Node& node : _lines.at(line)) {
         auto it = _paths.find(&node.process);
         assert(it != _paths.end());
         if (it->second.lane == lane) {
