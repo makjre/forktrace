@@ -41,7 +41,7 @@ struct SyscallInfo {
 };
 
 static const SyscallInfo syscalls[] = {
-    #include "syscalls.h" // generated this bad boi with a script
+    #include "syscalls.inc" // generated this bad boi with a script
 };
 
 static const string_view signals[] = {
