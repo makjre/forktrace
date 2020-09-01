@@ -27,9 +27,7 @@ void initCommands(std::function<bool()> onEOF = nullptr);
 /* Add a command to the list of registered commands that will be interpreted
  * by 'executeCommand'. Commands with the name 'get', 'set' and 'help' are
  * reserved. A std::invalid_argument exception will be thrown if the `name` is
- * already in the list, if any of the names that are already in the list start 
- * with `name`, if `params` is an empty string, or also if `name` contains any
- * whitespace, quotes or commas. */
+ * already in the list, or also if `name` has any whitespace/quotes/commas. */
 
 void registerCommand(
         std::string_view name,

@@ -66,12 +66,6 @@ void registerCommandInternal(
         throw invalid_argument("name");
     }
 
-    for (auto& pair : commands) {
-        if (pair.first.starts_with(name)) { // also true if key==name
-            throw invalid_argument("name");
-        }
-    }
-
     Command command;
     command.hasArgs = hasArgs;
     command.autoRepeat = autoRepeat;
@@ -102,12 +96,11 @@ Command* findCommand(const string& name) {
     vector<decltype(commands)::iterator> partialMatches;
 
     for (auto it = commands.begin(); it != commands.end(); ++it) {
-        if (it->first.starts_with(name)) {
+        if (it->first.rfind(name, 0) == 0) { // same as a starts_with method
             if (it->first.length() == name.length()) {
                 // We've found a perfect match
                 return &it->second;
             }
-
             partialMatches.push_back(it);
         }
     }

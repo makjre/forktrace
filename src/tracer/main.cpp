@@ -48,10 +48,11 @@ void handler(int sig, siginfo_t* info, void* ucontext) {
 
     char buf[100];
     string_view name = getSignalName(sig);
-    snprintf(buf, 100, "tracer (%d) got %.*s(%d) {info.si_pid=%d}\n",
+    int len = snprintf(buf, 100, 
+            "tracer (%d) got %.*s(%d) {info.si_pid=%d}\n",
             (int)getpid(), (int)name.length(), name.data(), sig, 
             (int)info->si_pid);
-    write(STDERR_FILENO, buf, strlen(buf));
+    write(STDERR_FILENO, buf, len);
 
     _exit(1);
 }
