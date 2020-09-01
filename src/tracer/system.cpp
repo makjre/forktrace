@@ -11,8 +11,8 @@
 #include <sys/reg.h>
 #include <sys/user.h>
 
-#include "system.h"
-#include "util.h"
+#include "system.hpp"
+#include "util.hpp"
 
 using namespace std;
 

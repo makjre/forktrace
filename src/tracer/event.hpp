@@ -6,8 +6,8 @@
 #include <vector>
 #include <cassert>
 
-#include "terminal.h"
-#include "util.h"
+#include "terminal.hpp"
+#include "util.hpp"
 
 class Process; // defined in process.h
 struct ExecEvent; // defined in this file

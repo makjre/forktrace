@@ -2,11 +2,11 @@
 #include <system_error>
 #include <algorithm>
 
-#include "terminal.h"
-#include "diagram.h"
-#include "process.h"
-#include "event.h"
-#include "util.h"
+#include "terminal.hpp"
+#include "diagram.hpp"
+#include "process.hpp"
+#include "event.hpp"
+#include "util.hpp"
 
 using namespace std;
 

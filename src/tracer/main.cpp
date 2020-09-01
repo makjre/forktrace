@@ -11,13 +11,13 @@
 #include <sys/prctl.h>
 #include <sys/wait.h>
 
-#include "tracer.h"
-#include "system.h"
-#include "process.h"
-#include "util.h"
-#include "diagram.h"
-#include "terminal.h"
-#include "command.h"
+#include "tracer.hpp"
+#include "system.hpp"
+#include "process.hpp"
+#include "util.hpp"
+#include "diagram.hpp"
+#include "terminal.hpp"
+#include "command.hpp"
 
 using namespace std;
 

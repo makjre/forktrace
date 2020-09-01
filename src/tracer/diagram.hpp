@@ -5,9 +5,9 @@
 #include <vector>
 #include <memory>
 
-#include "terminal.h"
-#include "event.h"
-#include "util.h"
+#include "terminal.hpp"
+#include "event.hpp"
+#include "util.hpp"
 
 class Process; // defined in process.h
 

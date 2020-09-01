@@ -5,11 +5,11 @@
 #include <unistd.h>
 #include <sys/ptrace.h>
 
-#include "process.h"
-#include "system.h"
-#include "tracer.h"
-#include "tracee.h"
-#include "util.h"
+#include "process.hpp"
+#include "system.hpp"
+#include "tracer.hpp"
+#include "tracee.hpp"
+#include "util.hpp"
 
 using namespace std;
 

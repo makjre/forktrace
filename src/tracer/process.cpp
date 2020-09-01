@@ -1,10 +1,10 @@
 #include <cassert>
 #include <sstream>
 
-#include "process.h"
-#include "system.h"
-#include "terminal.h"
-#include "util.h"
+#include "process.hpp"
+#include "system.hpp"
+#include "terminal.hpp"
+#include "util.hpp"
 
 using namespace std;
 

@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <signal.h>
 
-#include "tracee.h"
+#include "tracee.hpp"
 
 class Process; // defined in process.h
 

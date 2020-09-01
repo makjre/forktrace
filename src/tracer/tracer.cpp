@@ -6,10 +6,10 @@
 #include <system_error>
 #include <sstream>
 
-#include "tracer.h"
-#include "tracee.h"
-#include "process.h"
-#include "util.h"
+#include "tracer.hpp"
+#include "tracee.hpp"
+#include "process.hpp"
+#include "util.hpp"
 
 using namespace std;
 

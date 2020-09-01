@@ -6,9 +6,9 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
-#include "command.h"
-#include "util.h"
-#include "terminal.h"
+#include "command.hpp"
+#include "util.hpp"
+#include "terminal.hpp"
 
 using namespace std;
 

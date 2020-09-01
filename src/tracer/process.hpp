@@ -6,8 +6,8 @@
 #include <memory>
 #include <string>
 
-#include "util.h"
-#include "event.h"
+#include "util.hpp"
+#include "event.hpp"
 
 class ThreadGroup; // defined in this file
 

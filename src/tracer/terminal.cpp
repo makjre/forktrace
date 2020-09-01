@@ -7,8 +7,8 @@
 #include <iostream> // TODO
 #include <sys/ioctl.h>
 
-#include "terminal.h"
-#include "util.h"
+#include "terminal.hpp"
+#include "util.hpp"
 
 using namespace std;
 

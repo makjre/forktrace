@@ -7,8 +7,8 @@
 #include <memory>
 #include <string>
 
-#include "process.h"
-#include "system.h"
+#include "process.hpp"
+#include "system.hpp"
 
 class Tracer; // defined in tracer.h
 class Process; // defined in process.h
