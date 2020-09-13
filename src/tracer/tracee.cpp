@@ -20,11 +20,11 @@ BadTraceError::BadTraceError(pid_t pid, int err, string func) : _pid(pid) {
 }
 
 void BadTraceError::print(std::ostream& os) const {
-    os << "Got a BadTraceError. This means one of four things:" << endl
+/*    os << "Got a BadTraceError. This means one of four things:" << endl
         << "  (1) Kernel bug (this has happened to me!)" << endl
         << "  (2) I haven't read the man pages carefully enough" << endl
         << "  (3) There is a regular ole' bug in this program :-(" << endl
-        << "  (4) A third party has sabotaged us!!!" << endl;
+        << "  (4) A third party has sabotaged us!!!" << endl; */
     os << "Error summary:" << endl
         << "  what():  " << what() << endl;
 }
@@ -618,6 +618,9 @@ void Tracee::expectSignalStop(int status) {
             dbg << _pid << " halted" << endl;
             return;
         }
+    } else if (signal == SIGTTIN) {
+        throw BadTraceError(_pid, "Looks like this process tried to read "
+            "from the terminal. Sorry I don't support that (yet).");
     }
 
     // Otherwise it's just a normal signal.

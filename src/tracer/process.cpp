@@ -1,4 +1,5 @@
 #include <cassert>
+#include <iostream> // TODO
 #include <sstream>
 
 #include "process.hpp"
@@ -48,15 +49,6 @@ const ExecEvent* const Process::mostRecentExec(int startIndex) const {
     }
 
     return nullptr;
-}
-
-/* A version of addEvent that doesn't log anything to stdout. */
-void Process::addEventSilent(unique_ptr<Event> event, bool consumeLocation) {
-    assert(_state == State::ALIVE);
-    if (consumeLocation) {
-        event->setLocation(move(_location));
-    }
-    _events.push_back(move(event));
 }
 
 /* Add this event to the list and log it out. An assertion will fail if
@@ -199,8 +191,20 @@ void Process::notifySentSignal(pid_t killedId, Process& source,
         auto info = make_shared<KillInfo>(source, *dest, signal, toThread);
         source.addEvent(
                 make_unique<KillEvent>(source, info, true), true);
-        dest->addEventSilent(
-                make_unique<KillEvent>(*dest, move(info), false), true);
+
+        if (false && dest->dead()) {
+            // Some signals like SIGKILL will kill the process instantly, so
+            // the death event will already be there. We want to put the kill
+            // event to occur before it, so we'll swap them out.
+            assert(!dest->_events.empty());
+            unique_ptr<Event>& deathEvent = dest->_events.back();
+            dest->_events.push_back(
+                    make_unique<KillEvent>(*dest, move(info), false));
+            swap(deathEvent, dest->_events.back());
+        } else {
+            dest->_events.push_back(
+                    make_unique<KillEvent>(*dest, move(info), false));
+        }
     } else {
         // We're not able to draw a clean line between two processes in the
         // tree, so we'll just use a RaiseEvent instead.

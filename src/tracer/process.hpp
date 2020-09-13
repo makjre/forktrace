@@ -40,7 +40,6 @@ private:
 
     /* Private functions, described in source file */
     void addEvent(std::unique_ptr<Event> event, bool consumeLocation = false);
-    void addEventSilent(std::unique_ptr<Event> event, bool consumeLoc = false);
     const ExecEvent* const mostRecentExec(int startIndex = -1) const;
 
 public:
