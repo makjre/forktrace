@@ -1,185 +1,68 @@
-#include <map>
-#include <stdexcept>
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  command
+ *
+ *      TODO
+ */
 #include <signal.h>
-#include <sstream>
-#include <iterator>
+#include <cassert>
+#include <iostream>
+#include <unistd.h>
 #include <readline/readline.h>
 #include <readline/history.h>
 
 #include "command.hpp"
+#include "log.hpp"
 #include "util.hpp"
+#include "text-wrap.hpp"
 #include "terminal.hpp"
 
-using namespace std;
+using std::string;
+using std::string_view;
+using std::vector;
+using std::map;
+using std::function;
+using std::optional;
 
-struct Command {
-    bool hasArgs;
-    bool autoRepeat;
-    function<void(vector<string>)> action;
-    string brief;
-};
-
-/* List of commands. I just love that the STL has a version of a hash-map that
- * automatically sorts itself; all the commands are in alphabetical order and
- * I didn't even have to do anything! */
-static map<string, Command> commands;
-
-/* Our EOF handler callback */
-static function<bool()> onEOF;
-
-/* The most recent command that was executed */
-static string lastCommand;
-
-void initCommands(function<bool()> eofHandler) {
-    onEOF = eofHandler;
-    rl_bind_key('\t', rl_complete);
-    stifle_history(1000); // impose an upper limit on length of history
-
-    // Register built-in commands
-    registerCommand(
-        "help",
-        [] {
-            for (auto& pair : commands) {
-                cout << "  " << pair.first 
-                    << " --- " << pair.second.brief << endl;
-            }
-        },
-        "prints this help message"
-    );
-}
-
-bool isInvalidChar(char c) {
-    return isspace(c) || c == ',' || c == '"' || c == '\'';
-}
-
-void registerCommandInternal(
-        string_view pName,
-        bool hasArgs,
-        function<void(vector<string>)> action,
-        string brief,
-        bool autoRepeat)
+/* Will install this SIGINT handler when reading a line so that pressing Ctrl+C
+ * will cancel the current line. Idk if this is what you're supposed to do...*/
+static void read_line_sigint_handler(int sig)
 {
-    assert(action);
-    string name(pName);
-
-    if (find_if(name.begin(), name.end(), isInvalidChar) != name.end()) {
-        throw invalid_argument("name");
-    }
-
-    Command command;
-    command.hasArgs = hasArgs;
-    command.autoRepeat = autoRepeat;
-    command.action = action;
-    command.brief = move(brief);
-    commands.emplace(name, move(command));
+    write(1, "\n", 1);
+    rl_on_new_line();
+    rl_replace_line("", 0);
+    rl_redisplay();
 }
 
-void registerCommandWithArgs(
-        string_view name,
-        function<void(vector<string>)> action,
-        string brief,
-        bool autoRepeat)
+bool read_line(string_view prompt, string& line, bool complete)
 {
-    registerCommandInternal(name, true, action, brief, autoRepeat);
-}
-
-void registerCommand(
-        string_view name,
-        function<void()> action,
-        string brief,
-        bool autoRepeat)
-{
-    registerCommandInternal(name, false, bind(action), brief, autoRepeat);
-}
-
-Command* findCommand(const string& name) {
-    vector<decltype(commands)::iterator> partialMatches;
-
-    for (auto it = commands.begin(); it != commands.end(); ++it) {
-        if (it->first.rfind(name, 0) == 0) { // same as a starts_with method
-            if (it->first.length() == name.length()) {
-                // We've found a perfect match
-                return &it->second;
-            }
-            partialMatches.push_back(it);
-        }
+    if (complete)
+    {
+        rl_bind_key('\t', rl_complete);
+    }
+    else
+    {
+        rl_unbind_key('\t');
     }
 
-    if (partialMatches.empty()) {
-        cout << "Could not find any commands matching \"" 
-            << name << "\". Try \"help\"." << endl;
-        return nullptr;
-    }
-
-    if (partialMatches.size() > 1) {
-        cout << "Ambiguous command. Options are:";
-        for (auto it : partialMatches) {
-            cout << ' ' << it->first;
-        }
-        cout << endl;
-        return nullptr;
-    }
-
-    return &partialMatches.front()->second;
-}
-
-vector<string> tokenise(const string& input) {
-    vector<string> args;
-    const char* ch = input.c_str();
-    char delim;
-    // TODO C escapes??
-
-    for (;;) {
-        while (*ch != '\0' && isspace(*ch)) { 
-            ch++; 
-        }
-        if (*ch == '\0') {
-            return args;
-        }
-
-        delim = 0;
-        if (*ch == '"' || *ch == '\'') {
-            delim = *ch;
-            ch++;
-        }
-        const char* arg = ch;
-
-        while (*ch != '\0' && *ch != delim) {
-            if (delim == 0 && isspace(*ch)) {
-                break;
-            }
-            ch++;
-        }
-
-        args.emplace_back(arg, ch);
-    
-        if (delim != 0) {
-            if (*ch != delim) {
-                throw runtime_error("Couldn't find closing delimiter.");
-            }
-        }
-
-        if (*ch == '\0') {
-            return args;
-        }
-        ch++;
-    }
-}
-
-bool prompt(string_view str, string& result) {
     struct sigaction sa = {0}, old;
     sa.sa_flags = 0;
-    sa.sa_handler = [](int) { };
+    sa.sa_handler = read_line_sigint_handler;
     sigaction(SIGINT, &sa, &old);
 
+    // make sure at least one thread (this one) can handle SIGINT
+    // TODO this is a dependency between command.cpp and forktrace.cpp. 
+    // Can you retrieve current signal mask and restore that instead so
+    // that it's more modular and other parts of the code don't depend on this?
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGINT);
     pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
 
-    string prompt(str);
-    char* input = readline(prompt.c_str()); // grrr c strings
+    string promptStr(prompt);
+    char* input = readline(promptStr.c_str()); // grrr c strings
 
+    // restore things back to the way they were before
     pthread_sigmask(SIG_BLOCK, &set, nullptr);
     sigaction(SIGINT, &old, nullptr);
 
@@ -187,78 +70,382 @@ bool prompt(string_view str, string& result) {
         return false;
     }
 
-    // Add input to readline history
-    add_history(input);
+    line.assign(input);
+    strip(line);
 
-    result.assign(input);
+    if (!line.empty())
+    {
+        add_history(input);
+    }
     free(input);
     return true;
 }
 
-void commandLoop(string_view thePrompt) {
-    for (;;) {
-        string line;
-        if (!prompt(colourise(thePrompt, Colour::BOLD), line)) {
-            if (!onEOF || !onEOF()) { // callback
-                return;
-            }
+CommandParser::CommandParser()
+{
+    add("help", "[COMMAND]", 
+        "shows help about a command, or all if none specified", 
+        [&](vector<string> args) { help_handler(args); });
+}
+
+const CommandParser::Command* 
+CommandParser::find_command(string_view prefix) const
+{
+    vector<string> matches;
+    for (const auto& [name, command] : _commands)
+    {
+        if (name == prefix)
+        {
+            return &command; // exact match
         }
-
-        if (line.empty()) {
-            if (lastCommand.empty()) {
-                continue;
-            }
-            swap(line, lastCommand);
-        } else {
-            strip(line);
+        if (starts_with(name, prefix))
+        {
+            matches.push_back(name);
         }
-        lastCommand.clear();
+    }
+    if (matches.empty())
+    {
+        error("Couldn't find any commands matching '{}'.", prefix);
+        return nullptr;
+    }
+    if (matches.size() > 1)
+    {
+        error("'{}' is ambiguous. Options are: {}", prefix, join(matches));
+        return nullptr;
+    }
+    auto it = _commands.find(matches.front());
+    assert(it != _commands.end()); // is there really any point in this
+    return &it->second;
+}
 
-        auto firstSpace = find_if(line.begin(), line.end(), 
-                [](char c) { return isspace(c); });
-
-        string cmdStr(line.begin(), firstSpace);
-        string params(firstSpace, line.end());
-        strip(params);
-
-        Command* cmd = findCommand(cmdStr); // prints error message for us
-        if (!cmd) {
-            continue;
-        }
-        
-        if (!params.empty() && !cmd->hasArgs) {
-            cout << "This command does not accept any arguments." << endl;
-            continue;
-        }
-
-        assert(cmd->action);
-        try {
-            cmd->action(tokenise(params));
-        } catch (const QuitCommandLoop& e) {
+void CommandParser::help_handler(vector<string> args) const
+{
+    if (args.size() > 1)
+    {
+        error("The 'help' command accepts either zero or one arguments.");
+        return;
+    }
+    if (args.size() == 1)
+    {
+        auto it = _commands.find(args[0]);
+        if (it == _commands.end())
+        {
+            error("The '{}' command does not exist. Try 'help'.", args[0]);
             return;
-        } catch (const exception& e) {
-            cout << colourise("error: ", Colour::RED_BOLD) << e.what() << endl;
         }
+        string cmd = it->first + ' ' + it->second.params;
+        std::cerr << colour(fmt::emphasis::bold, cmd) << '\n';
+        std::cerr << wrap_text_to_screen(it->second.help, false, 0);
+        return;
+    }
+    for (const auto& [name, command] : _commands)
+    {
+        size_t width = 0, height = 0;
+        get_terminal_size(width, height); // this could fail (and return false)
 
-        if (cmd->autoRepeat) {
-            lastCommand = move(line); 
+        string line = "  ";
+        line += colour(fmt::emphasis::bold, name);
+        if (!command.params.empty())
+        {
+            line += ' ' + colour(fmt::emphasis::bold, command.params) + "  ";
+        }
+        line = pad(line, 30);
+
+        if (width == 0 || line.size() + command.help.size() > width)
+        {
+            std::cerr << line << '\n';
+            std::cerr << wrap_text(command.help, width, 8);
+        }
+        else
+        {
+            std::cerr << line << command.help << '\n';
         }
     }
 }
 
-bool parseBool(string_view input) {
-    string str(input);
-    transform(str.begin(), str.end(), str.begin(), ::tolower);
+static bool is_valid_name(string_view name)
+{
+    auto isBad = [](char c) { return !isalnum(c) && c != '_' && c != '-'; };
+    return std::find_if(name.begin(), name.end(), isBad) == name.end();
+}
 
-    if (str == "yes" || str == "1" || str == "on" || str == "enabled" 
-            || str == "enable" || str == "true") {
-        return true;
+void CommandParser::add(string_view name,
+                        string_view params,
+                        string_view help,
+                        function<void()> action,
+                        bool autoRepeat)
+{
+    auto wrapper = [=](vector<string> args) {
+        if (!args.empty())
+        {
+            error("The '{}' command expects no arguments.", name);
+            return;
+        }
+        action();
+    };
+    return add(name, params, help, wrapper, autoRepeat);
+}
+
+void CommandParser::add(string_view name,
+                        string_view params,
+                        string_view help,
+                        function<void(string)> action,
+                        bool autoRepeat)
+{
+    auto wrapper = [=](vector<string> args) {
+        if (args.size() != 1)
+        {
+            error("The '{}' command expects a single argument.", name);
+            return;
+        }
+        action(std::move(args[0]));
+    };
+    return add(name, params, help, wrapper, autoRepeat);
+}
+
+void CommandParser::add(string_view name,
+                        string_view params,
+                        string_view help,
+                        function<void(vector<string>)> action,
+                        bool autoRepeat)
+{
+    Command command;
+    command.params = params;
+    command.help = help;
+    command.action = action;
+    command.autoRepeat = autoRepeat;
+    assert(is_valid_name(name));
+    assert(action);
+    _commands.emplace(name, command);
+}
+
+/* Convert a hexadecimal digit to an integer. Asserts that it's in range. */
+static int hex_to_int(char digit)
+{
+    if ('A' <= digit && digit <= 'F')
+    {
+        return digit - 'A' + 10;
     }
+    if ('a' <= digit && digit <= 'f')
+    {
+        return digit - 'a' + 10;
+    }
+    if ('0' <= digit && digit <= '9')
+    {
+        return digit - '0';
+    }
+    assert(!"Unreachable");
+}
 
-    if (str == "no" || str == "0" || str == "off" || str == "disabled"
-            || str == "disable" || str == "false") {
+/* Parses an escape sequence (C-style) at the beginning of line (the backslash
+ * should already have been skipped). On success, true is returned and the
+ * character that was encoded is stored in 'result' and `line` is advanced
+ * past the escape sequence with remove_prefix().  On failure, an error message
+ * is printed and false is returned. */
+static bool extract_escape(string_view& line, char& result)
+{
+    if (line.empty())
+    {
+        error("Expected a C-style escape sequence after '\\'.");
         return false;
     }
 
-    throw runtime_error("Invalid boolean parameter.");
+    // Handle single-character escapes first
+    switch (line[0])
+    {
+        case 'n':   result = '\n';  break;
+        case 'r':   result = '\r';  break;
+        case 't':   result = '\t';  break;
+        case 'b':   result = '\b';  break;
+        case 'f':   result = '\f';  break;
+        case 'v':   result = '\v';  break;
+        case '\\':  result = '\\';  break;
+        case '\'':  result = '\'';  break;
+        case '?':   result = '\?';  break;
+        case '"':   result = '"';   break;
+        default:    result = -1;    break; // sentinel value
+    }
+    if (result != -1)
+    {
+        line.remove_prefix(1);
+        return true;
+    }
+
+    // Handle octal codes
+    int value = 0;
+    if (isdigit(line[0]))
+    {
+        value = line[0] - '0';
+        line.remove_prefix(1);
+        for (int i = 0; i < 2 && !line.empty() && isdigit(line[0]); ++i)
+        {
+            value = value * 8 + (line[0] - '0');
+            line.remove_prefix(1);
+        }
+        if (value < 0 || value > 255)
+        {
+            error("Octal escape sequence is outside the permitted range.");
+            return false;
+        }
+        result = (char)value;
+        return true;
+    }
+
+    // Handle hex codes
+    if (line[0] == 'x')
+    {
+        line.remove_prefix(1);
+        if (line.empty() || !isxdigit(line[0]))
+        {
+            error("Expected hexadecimal digits after escape sequence '\\x'.");
+            return false;
+        }
+        int i;
+        for (i = 0; i < 2 && !line.empty() && isxdigit(line[0]); ++i)
+        {
+            value = value * 16 + hex_to_int(line[0]);
+            line.remove_prefix(1);
+        }
+        if (i == 0)
+        {
+            error("Expected at least one hexadecimal digit after '\\x'.");
+            return false;
+        }
+        assert(0 <= value && value <= 255);
+        result = (char)value;
+        return true;
+    }
+
+    // TODO maybe handle unicode escapes but honestly why bother
+    error("Invalid escape sequence starting with '{}'.", line[0]);
+    return false;
+}
+
+/* Extracts a token from line using line[0] as the delimiter. Will interpret
+ * C-style escapes within the token. Advances line to where the function has
+ * finished parsing with remove_prefix(). Prints an error message and returns 
+ * false if invalid escapes were found, or there was no closing delimiter. */
+static bool extract_string(string_view& line, string& token)
+{
+    assert(!line.empty());
+    char delim = line[0];
+    line.remove_prefix(1); // skip the delimiter
+    token.clear();
+
+    for (;;) {
+        while (!line.empty() && line[0] != delim && line[0] != '\\')
+        {
+            token += line[0];
+            line.remove_prefix(1); // advance forwards
+        }
+        if (line.empty())
+        {
+            error("Error when parsing: Unmatched delimiter: {}", delim);
+            return false;
+        }
+        if (line[0] == delim)
+        {
+            line.remove_prefix(1);
+            return true;
+        }
+        if (line[0] == '\\')
+        {
+            char c;
+            line.remove_prefix(1); // skip the backslash
+            if (!extract_escape(line, c)) // prints error
+            {
+                return false;
+            }
+            token += c;
+        }
+    }
+}
+
+/* Tokenises the provided line. Tokens can be separated by spaces. Interprets
+ * strings formed from single and double quotes as a single token. These can
+ * contain C-style escapes in them (use a double backslace to avoid that). On
+ * error, an error message is printed and an empty list is returned. */
+static vector<string> tokenise(string_view line)
+{
+    vector<string> tokens;
+    for (;;) {
+        // Skip whitespace
+        while (!line.empty() && isspace(line[0]))
+        {
+            line.remove_prefix(1);
+        }
+        if (line.empty())
+        {
+            return tokens;
+        }
+
+        // handle strings
+        if (line[0] == '"' || line[0] == '\'')
+        {
+            string token;
+            if (!extract_string(line, token)) // prints error
+            {
+                return {};
+            }
+            tokens.push_back(std::move(token));
+            continue;
+        }
+
+        // find the end of this token
+        size_t pos = 0;
+        while (pos < line.size() && !isspace(line[pos]))
+        {
+            pos++;
+        }
+        tokens.emplace_back(line.substr(0, pos));
+        line.remove_prefix(pos);
+    }
+}
+
+bool CommandParser::do_command(string_view thePrompt)
+{
+    string line;
+    if (!read_line(thePrompt, line, true)) // use completer=true
+    {
+        return false;
+    }
+
+    if (line.empty())
+    {
+        if (_autoRepeatCommand.empty())
+        {
+            return true;
+        }
+        std::swap(line, _autoRepeatCommand); // repeat last command
+    }
+    _autoRepeatCommand.clear();
+
+    vector<string> tokens = tokenise(line);
+    debug("tokens = [{}]", join(tokens, ','));
+
+    if (tokens.empty())
+    {
+        return true;
+    }
+    const Command* cmd = find_command(tokens[0]); // prints errors for us
+    if (!cmd)
+    {
+        return true;
+    }
+    tokens.erase(tokens.begin()); // remove command name
+
+    try 
+    {
+        cmd->action(std::move(tokens)); // do the thing
+    }
+    catch (const std::exception& e)
+    {
+        error("The command threw an error: {}", e.what());
+    }
+    
+    if (cmd->autoRepeat)
+    {
+        _autoRepeatCommand = std::move(line);
+    }
+    return true;
 }

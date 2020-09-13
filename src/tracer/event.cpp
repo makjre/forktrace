@@ -1,274 +1,342 @@
 #include <cassert>
-#include <sstream>
-#include <cstring>
+#include <iostream>
 
 #include "event.hpp"
 #include "process.hpp"
 #include "system.hpp"
-#include "terminal.hpp"
 #include "util.hpp"
 
-using namespace std;
+using std::string;
+using std::string_view;
+using std::vector;
+using std::unique_ptr;
+using std::shared_ptr;
+using fmt::format;
 
-string SourceLocation::toString() const {
-    ostringstream oss;
-    oss << file << ':' << func << ':' << line;
-    return oss.str();
+string SourceLocation::to_string() const 
+{
+    return format("{}:{}:{}", file, func, line);
 }
 
-string ExecEvent::file() const {
+string ExecEvent::file() const 
+{
     assert(!calls.empty());
     return calls.back().file;
 }
 
-bool ExecEvent::succeeded() const {
+bool ExecEvent::succeeded() const 
+{
     assert(!calls.empty());
     return calls.back().errcode == 0;
 }
 
-void Event::setLocation(unique_ptr<SourceLocation> location) {
-    loc = move(location);
+void Event::set_location(SourceLocation loc) 
+{
+    location.emplace(std::move(loc));
 }
 
-void Event::printTree(Indent indent) const {
-    cout << indent << toString() << endl;
+void Event::print_tree(Indent indent) const 
+{
+    std::cerr << format("{}{}\n", indent, to_string());
 }
 
-string ForkEvent::toString() const {
-    ostringstream oss;
-    oss << owner.pid() << " forked " << child->pid();
-    return oss.str();
+string ForkEvent::to_string() const 
+{
+    return format("{} forked {}", owner.pid(), child->pid());
 }
 
-void ForkEvent::printTree(Indent indent) const {
-    Event::printTree(indent);
-    child->printTree(indent + 1);
+void ForkEvent::print_tree(Indent indent) const 
+{
+    Event::print_tree(indent);
+    child->print_tree(indent + 1);
 }
 
-void ForkEvent::draw(IEventRenderer& renderer) const {
-    renderer.drawChar(linkColour(), '+');
+void ForkEvent::draw(IEventRenderer& renderer) const 
+{
+    renderer.draw_char(link_colour(), '+');
 }
 
-string getWaitTargetString(pid_t waitedId) {
-    ostringstream oss;
-    if (waitedId == -1) {
-        oss << "any child";
-    } else if (waitedId > 0) {
-        oss << waitedId;
-    } else if (waitedId == 0) {
-        oss << "their group";
-    } else {
-        oss << "group " << -waitedId;
+string get_wait_target_string(pid_t waitedId) 
+{
+    if (waitedId == -1)
+    {
+        return "any child";
     }
-    return oss.str();
+    else if (waitedId > 0)
+    {
+        return format("{}", waitedId);
+    }
+    else if (waitedId == 0)
+    {
+        return "their group";
+    }
+    else 
+    {
+        return format("{}", -waitedId);
+    }
 }
 
-string WaitEvent::toString() const {
-    ostringstream oss;
-    oss << owner.pid();
-    if (nohang) {
-        oss << " waited for " << getWaitTargetString(waitedId) 
-            << " (WNOHANG) ";
-        if (error == 0) {
-            oss << "{returned 0}";
-        } else {
-            oss << "{failed: " << errStr(error) << '}';
+string WaitEvent::to_string() const 
+{
+    // Remember, WaitEvent's don't describe successful reap events, they only
+    // describe waits that failed or haven't yet resulted in a reap.
+    string target = get_wait_target_string(waitedId);
+    if (nohang)
+    {
+        if (error == 0)
+        {
+            return format("{} waited for {} (WNOHANG) {{returned 0}}", 
+                owner.pid(), target);
         }
-    } else {
-        if (error == 0) {
-            oss << " started waiting for " << getWaitTargetString(waitedId);
-        } else {
-            oss << " waited for " << getWaitTargetString(waitedId)
-                << " {failed: " << errStr(error) << '}';
+        else
+        {
+            return format("{} waited for {} (WNOHANG) {{failed: {}}}",
+                owner.pid(), target, strerror_s(error));
         }
     }
-    return oss.str();
+    else
+    {
+        if (error == 0)
+        {
+            return format("{} started waiting for {}", 
+                owner.pid(), target);
+        }
+        else
+        {
+            return format("{} waited for {} {{failed: {}}}",
+                owner.pid(), target, strerror_s(error));
+        }
+    }
 }
 
-void WaitEvent::draw(IEventRenderer& renderer) const {
-    renderer.drawChar((error == 0) ? Colour::WHITE : BAD_WAIT_COLOUR, 'w');
+void WaitEvent::draw(IEventRenderer& renderer) const 
+{
+    renderer.draw_char((error == 0) ? DEFAULT_COLOUR : BAD_WAIT_COLOUR, 'w');
 }
     
-ReapEvent::ReapEvent(Process& owner, unique_ptr<WaitEvent> wait, 
-        shared_ptr<Process> child)
-    : LinkEvent(owner), child(move(child)), wait(move(wait)) 
+ReapEvent::ReapEvent(Process& owner, 
+                     unique_ptr<WaitEvent> wait, 
+                     shared_ptr<Process> child)
+    : LinkEvent(owner), child(std::move(child)), wait(std::move(wait)) 
 {
     // Now that we are taking the place of the WaitEvent, we need to steal its
     // SourceLocation for ourselves. (use this-> to prevent shadowing).
-    loc = move(this->wait->loc); 
+    location = std::move(this->wait->location);
 }
 
-string ReapEvent::toString() const {
-    ostringstream oss;
-    oss << owner.pid() << " reaped " << child->deathEvent().toString(); 
-    oss << " {waited for " << getWaitTargetString(wait->waitedId);
-    if (wait->nohang) {
-        oss << " (WNOHANG)}";
-    } else {
-        oss << '}';
+string ReapEvent::to_string() const 
+{
+    string target = get_wait_target_string(wait->waitedId);
+    if (wait->nohang)
+    {
+        return format("{} reaped {} {{waited for {} (WNOHANG)}}", 
+            owner.pid(), child->death_event().to_string(), target);
     }
-    return oss.str();
-}
-
-void ReapEvent::draw(IEventRenderer& renderer) const {
-    Colour c = linkColour();
-    if (wait->waitedId == -1) {
-        renderer.drawChar(c, 'w');
-    } else if (wait->waitedId > 0) {
-        renderer.drawChar(c, 'i');
-    } else {
-        renderer.drawChar(c, 'g');
+    else
+    {
+        return format("{} reaped {} {{waited for {}}}",
+            owner.pid(), child->death_event().to_string(), target);
     }
 }
 
-char ReapEvent::linkChar() const {
+void ReapEvent::draw(IEventRenderer& renderer) const 
+{
+    char c;
+    if (wait->waitedId == -1)
+    {
+        c = 'w';
+    }
+    else if (wait->waitedId > 0)
+    {
+        c = 'i';
+    }
+    else
+    {
+        c = 'g';
+    }
+    renderer.draw_char(link_colour(), c);
+}
+
+char ReapEvent::link_char() const 
+{
     return child->killed() ? '~' : '-';
 }
 
-Colour ReapEvent::linkColour() const {
+fmt::text_style ReapEvent::link_colour() const 
+{
     return child->killed() ? KILLED_COLOUR : EXITED_COLOUR;
 }
 
-string RaiseEvent::toString() const {
-    ostringstream oss;
-    oss << owner.pid() << " sent " << getSignalName(signal) << '('
-        << signal << ") to ";
-
-    if (killedId == -1) {
-        oss << "everyone";
-    } else if (killedId == 0) {
-        oss << "their group";
-    } else if (killedId < 0) {
-        oss << "group " << -killedId;
-    } else {
-        if (killedId == owner.pid()) {
-            oss << "themself {as a ";
-        } else {
-            oss << killedId << " {as a ";
-        }
-        oss << (toThread ? "thread}" : "process}");
+string RaiseEvent::to_string() const 
+{
+    if (killedId == -1)
+    {
+        return format("{} sent {} ({}) to everyone",
+            owner.pid(), get_signal_name(signal), signal);
     }
-
-    return oss.str();
+    else if (killedId == 0)
+    {
+        return format("{} sent {} ({}) to their group",
+            owner.pid(), get_signal_name(signal), signal);
+    }
+    else
+    {
+        string_view kind = toThread ? "thread" : "process";
+        if (killedId == owner.pid())
+        {
+            return format("{} sent {} ({}) to themself {{as a {}}}",
+                owner.pid(), get_signal_name(signal), signal, kind);
+        }
+        else
+        {
+            return format("{} sent {} ({}) to {} {{as a {}}}",
+                owner.pid(), get_signal_name(signal), signal, killedId, kind);
+        }
+    }
 }
 
-void RaiseEvent::draw(IEventRenderer& renderer) const {
-    //renderer.drawChar(SIGNAL_SEND_COLOUR, 'k');
-    renderer.drawString(SIGNAL_SEND_COLOUR, to_string(signal));
+void RaiseEvent::draw(IEventRenderer& renderer) const 
+{
+    //renderer.draw_char(SIGNAL_SEND_COLOUR, 'k');
+    renderer.draw_string(SIGNAL_SEND_COLOUR, std::to_string(signal));
 }
  
-string KillEvent::toString() const {
-    ostringstream oss;
-    if (sender) {
-        oss << owner.pid() << " sent " << getSignalName(info->signal) 
-            << '(' << info->signal << ')' << " to " << linkedPath().pid();
-    } else {
-        oss << linkedPath().pid() << " sent " << getSignalName(info->signal) 
-            << '(' << info->signal << ')' << " to " << owner.pid();
+string KillEvent::to_string() const 
+{
+    pid_t dest = linked_path().pid();
+    pid_t src = owner.pid();
+    if (!sender)
+    {
+        std::swap(src, dest);
     }
-    oss << " {" << (info->toThread ? "as a thread" : "as a process") << '}';
-    return oss.str();
+    return format("{} sent {} ({}) to {} {{as a {}}}",
+        src, get_signal_name(info->signal), info->signal, dest,
+        info->toThread ? "thread" : "process");
 }
 
-void KillEvent::draw(IEventRenderer& renderer) const {
-    //renderer.drawChar(SIGNAL_SEND_COLOUR, 'k');
-    renderer.drawString(SIGNAL_SEND_COLOUR, to_string(info->signal));
+void KillEvent::draw(IEventRenderer& renderer) const 
+{
+    //renderer.draw_char(SIGNAL_SEND_COLOUR, 'k');
+    renderer.draw_string(SIGNAL_SEND_COLOUR, std::to_string(info->signal));
 }
 
-const Process& KillEvent::linkedPath() const {
+const Process& KillEvent::linked_path() const 
+{
     return sender ? info->dest : info->source;
 }
 
-string SignalEvent::toString() const {
-    ostringstream oss;
-    oss << owner.pid() << (killed ? " killed by " : " received ") 
-        << getSignalName(signal) << '(' << signal << ')';
-    if (origin == -1) {
-        oss << " {unknown sender}";
-    } else if (origin == 0 || origin == owner.pid()) {
-        oss << " {raised by self}";
-    } else if (origin == getpid()) {
-        oss << " {sent by tracer}";
-    } else {
-        oss << " {sent by " << origin << '}';
+string SignalEvent::to_string() const 
+{
+    string_view action = killed ? "killed by" : "received";
+    if (origin == -1)
+    {
+        return format("{} {} {} ({}) {{unknown sender}}",
+            owner.pid(), action, get_signal_name(signal), signal);
     }
-    return oss.str();
+    else if (origin == 0 || origin == owner.pid())
+    {
+        return format("{} {} {} ({}) {{raised by self}}",
+            owner.pid(), action, get_signal_name(signal), signal);
+    }
+    else if (origin == getpid())
+    {
+        return format("{} {} {} ({}) {{sent by tracer}}",
+            owner.pid(), action, get_signal_name(signal), signal);
+    }
+    else
+    {
+        return format("{} {} {} ({}) {{sent by {}}}",
+            owner.pid(), action, get_signal_name(signal), signal, origin);
+    }
 }
 
-void SignalEvent::draw(IEventRenderer& renderer) const {
-    if (!killed) {
-        renderer.drawString(SIGNAL_COLOUR, to_string(signal));
+void SignalEvent::draw(IEventRenderer& renderer) const 
+{
+    if (!killed) 
+    {
+        renderer.draw_string(SIGNAL_COLOUR, std::to_string(signal));
         return;
     }
 
-    if (owner.orphaned()) {
+    if (owner.orphaned()) 
+    {
         renderer.backtrack();
-        renderer.drawChar(Colour::WHITE, '[');
-    } else if (!owner.reaped()) {
+        renderer.draw_char(DEFAULT_COLOUR, '[');
+    } 
+    else if (!owner.reaped()) 
+    {
         renderer.backtrack();
-        renderer.drawChar(KILLED_COLOUR, '~');
+        renderer.draw_char(KILLED_COLOUR, '~');
     }
 
-    renderer.drawString(KILLED_COLOUR, to_string(signal));
+    renderer.draw_string(KILLED_COLOUR, std::to_string(signal));
 
-    if (owner.orphaned()) {
-        renderer.drawChar(Colour::WHITE, ']');
+    if (owner.orphaned()) 
+    {
+        renderer.draw_char(DEFAULT_COLOUR, ']');
     }
 }
 
-string ExitEvent::toString() const {
-    ostringstream oss;
-    oss << owner.pid() << " exited " << status;
-    return oss.str();
+string ExitEvent::to_string() const 
+{
+    return format("{} exited {}", owner.pid(), status);
 }
 
-void ExitEvent::draw(IEventRenderer& renderer) const {
-    if (owner.orphaned()) {
+void ExitEvent::draw(IEventRenderer& renderer) const 
+{
+    if (owner.orphaned()) 
+    {
         renderer.backtrack();
-        renderer.drawChar(Colour::WHITE, '(');
+        renderer.draw_char(DEFAULT_COLOUR, '(');
     }
 
-    renderer.drawString(EXITED_COLOUR, to_string(status));
+    renderer.draw_string(EXITED_COLOUR, std::to_string(status));
 
-    if (owner.orphaned()) {
-        renderer.drawChar(Colour::WHITE, ')');
+    if (owner.orphaned()) 
+    {
+        renderer.draw_char(DEFAULT_COLOUR, ')');
     }
 }
 
-string ExecCall::toString(const ExecEvent& event) const {
-    ostringstream oss;
-    if (errcode == 0) {
-        oss << event.owner.pid() << " execed " << file << " [ ";
-        for (auto& arg : event.args) {
-            oss << arg << ' ';
+string ExecCall::to_string(const ExecEvent& event) const 
+{
+    if (errcode == 0)
+    {
+        return format("{} execed {} [ {} ]", 
+            event.owner.pid(), file, join(event.args));
+    }
+    else
+    {
+        if (file.empty())
+        {
+            return format("{} failed to exec: {}", 
+                event.owner.pid(), strerror_s(errcode));
         }
-        oss << ']';
-    } else {
-        oss << event.owner.pid() << " failed to exec";
-        if (!file.empty()) {
-            oss << ' ' << file;   
-        }
-        oss << ": " << errStr(errcode);
+        return format("{} failed to exec {}: {}",
+            event.owner.pid(), file, strerror_s(errcode));
     }
-    return oss.str();
 }
 
-string ExecEvent::toString() const {
+string ExecEvent::to_string() const 
+{
     assert(!calls.empty());
-    ostringstream oss;
-    oss << calls.back().toString(*this);
-    if (calls.size() > 1) {
-        oss << " (" << calls.size() << " attempts)";
+    if (calls.size() == 1)
+    {
+        return calls.back().to_string(*this);
     }
-    return oss.str();
+    return format("{} ({} attempts)", 
+        calls.back().to_string(*this), calls.size());
 }
 
-void ExecEvent::printTree(Indent indent) const {
-    for (auto& call : calls) {
-        cout << indent << call.toString(*this) << endl;
+void ExecEvent::print_tree(Indent indent) const 
+{
+    for (auto& call : calls) 
+    {
+        std::cerr << format("{}{}\n", indent, call.to_string(*this));
     }
 }
 
-void ExecEvent::draw(IEventRenderer& renderer) const {
-    renderer.drawChar(succeeded() ? EXEC_COLOUR : BAD_EXEC_COLOUR, 'E');
+void ExecEvent::draw(IEventRenderer& renderer) const 
+{
+    renderer.draw_char(succeeded() ? EXEC_COLOUR : BAD_EXEC_COLOUR, 'E');
 }

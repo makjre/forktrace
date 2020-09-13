@@ -1,758 +1,840 @@
-#include <iostream>
-#include <thread>
-#include <queue>
-#include <mutex>
-#include <atomic>
-#include <sstream>
-#include <cstring>
-#include <unistd.h>
-#include <signal.h>
-#include <fcntl.h>
-#include <sys/prctl.h>
-#include <sys/wait.h>
-
-#include "tracer.hpp"
-#include "system.hpp"
-#include "process.hpp"
-#include "util.hpp"
-#include "diagram.hpp"
-#include "terminal.hpp"
-#include "command.hpp"
-
-using namespace std;
-
-/* To cleanly find out when a process is orphaned, we exec a reaper process
- * (and run the tracer as the child instead) that sits above us and sends the
- * pids of orphans that it has collected through a pipe. We'll then create a
- * thread to read those pids from the pipe onto this queue. We'll tell the
- * tracer how it can access these orphans via a callback function.
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  main
+ *
+ *      Basically just parsing for command line options. Once we've done all of
+ *      that, we just pass everything over to forktrace() in forktrace.cpp.
  */
-static queue<pid_t> orphans;
-static mutex orphansLock;
+#include <cstring>
+#include <iostream>
+#include <cassert>
+#include <functional>
+#include <algorithm>
+#include <optional>
+#include <map>
+#include <memory>
 
-/* TODO Explain. TODO MEMORY FENCE?? TODO volatile? */
-static volatile atomic<bool> done = false;
+#include "util.hpp"
+#include "log.hpp"
+#include "inject.hpp"
+#include "forktrace.hpp"
+#include "text-wrap.hpp"
+#include "terminal.hpp"
+#include "ptrace.hpp"
+#include "parse.hpp"
 
-/* Configuration options that we give to Diagrams */
-static unsigned laneWidth = 5;
-static bool hideNonFatalSignals = true;
+using std::string;
+using std::string_view;
+using std::vector;
+using std::function;
+using std::optional;
+using std::map;
+using std::unique_ptr;
+using fmt::format;
 
-/* Configuration options for whether we print diagram debug info */
-static bool printDiagramDebug = false;
+/* Returned by argument parser to determine what course of action we should be
+ * taking. Depending on the action, the argument parser may leave some args
+ * unparsed and leave them to the specific action to handle. */
+enum class ProgramAction
+{
+    /* Take a command run the command line, run it from start to finish, and
+     * then exit the program (although the user can try to halt the process,
+     * in which case the RUN is cancelled and they get taken to the CMDLINE).
+     *
+     * When the run flag is specified, the argparser keeps looking for more
+     * options after it, and parsing them, but when it hits an argument that
+     * isn't an option (i.e., doesn't start with '-') (and doesn't belong to 
+     * an option) it assumes that it's hit the start of the command that needs 
+     * to be run, and leaves the rest of the parsing to the RUN action. If a
+     * separator consisting of two dashes "--" is hit, then the argparser stops
+     * anyway and leaves any remaining arguments to the RUN action. */
+    RUN,
+    /* In this case, the program just starts up the command line immediately
+     * and lets the user take it from there. This is the default behaviour of
+     * the program if no arguments are given. In this case, the argument parser
+     * parses the entire command line for options. */
+    CMDLINE,
+    /* This is the mode (see inject_option_usage for a long discussion) that
+     * helps modify compile commands so that the output files have extra code
+     * in them that helps forktrace identify the source location of certain
+     * system calls. When the inject flag is specified, the argument parser 
+     * stops. No further options are parsed since they are assumed to either
+     * be the names of files to inject, or arguments to the compiler command
+     * to inject into. All remaining parsing is left to the INJECT code. */
+    INJECT,
+    /* There was an error parsing the command line arguments (so the program
+     * should exit with an error status, e.g., 1). */
+    ERROR,
+    /* The program should just exit straight away (this would happen for the
+     * help option). The program should not exit with an error status. */
+    EXIT,
+};
 
-/* Command line prompt */
-static string_view PROMPT = ">> ";
+/******************************************************************************
+ * OPTION CLASSES (these represent command-line options)
+ *****************************************************************************/
 
-void handler(int sig, siginfo_t* info, void* ucontext) {
-    restoreTerminal();
+/* The callbacks for options can throw this if they encounter an error that
+ * should cause parsing to stop and the program to exit with an error. */
+class OptionError : public std::exception
+{
+private:
+    string _msg;
+public:
+    OptionError(string_view msg) : _msg(msg) { }
+    const char* what() const noexcept { return _msg.c_str(); }
 
-    char buf[100];
-    string_view name = getSignalName(sig);
-    int len = snprintf(buf, 100, 
-            "tracer (%d) got %.*s(%d) {info.si_pid=%d}\n",
-            (int)getpid(), (int)name.length(), name.data(), sig, 
-            (int)info->si_pid);
-    write(STDERR_FILENO, buf, len);
+    /* Helper constructor that accepts a fmt::format string and args */
+    template<typename ...Args>
+    OptionError(string_view fmt, Args ...args)
+        : _msg(format(fmt, args...)) { }
+};
 
-    _exit(1);
-}
+struct Option
+{
+    /* Called by the ArgParser when this option is encountered. If a value is
+     * provided for the option, it is passed - otherwise nullopt is passed. 
+     * This function should throw a std::exception to indicate an error. */
+    virtual void parse(optional<string> param) const = 0;
 
-void registerSignals() {
-    struct sigaction sa = {0};
-    sa.sa_flags = SA_SIGINFO;
-    sa.sa_sigaction = handler;
-    sigaction(SIGHUP, &sa, 0);
-    sigaction(SIGABRT, &sa, 0);
-    sigaction(SIGINT, &sa, 0);
-    sigaction(SIGTERM, &sa, 0);
-    sigaction(SIGQUIT, &sa, 0);
-    sigaction(SIGSEGV, &sa, 0);
-    sigaction(SIGILL, &sa, 0);
-    sigaction(SIGFPE, &sa, 0);
-    sigaction(SIGPIPE, &sa, 0);
+    string name;    // Long form name. Doesn't include double dashes.
+    char shortName; // == '\0' if there's no short form.
+    string param;   // name of arguments, empty string if not applicable
+    string help;    // Doesn't need newlines. We'll do that with wrap_text.
 
-    // use this to interrupt blocking system calls
-    sa.sa_handler = [](int) { };
-    sigaction(SIGUSR1, &sa, 0);
-}
+    Option(string_view name, 
+               char shortName,
+               string_view param, 
+               string_view help)
+        : name(name), shortName(shortName), param(param), help(help) { }
 
-void signalThread(Tracer& tracer, sigset_t set) {
-    int sig;
-    while (sigwait(&set, &sig) == 0) {
-        if (done) {
-            return;
-        }
-        cout << "Halting" << endl;
-        tracer.halt();
+    virtual ~Option() { }
+};
+
+/* A command-line option that takes no parameter. */
+struct Option0 : Option
+{
+    void parse(optional<string> param) const;
+
+    function<void()> handler; // callback for this option
+
+    Option0(string_view name, 
+           char shortName, 
+           string_view param,
+           string_view help, 
+           function<void()> handler)
+        : Option(name, shortName, param, help), handler(handler) { }
+};
+
+/* A command-line option that takes a string parameter (however, this parameter
+ * could be a list of multiple items separated by commas or something). */
+struct Option1 : Option
+{
+    void parse(optional<string> param) const;
+
+    function<void(string)> handler; // callback for this option
+
+    Option1(string_view name, 
+           char shortName, 
+           string_view param,
+           string_view help, 
+           function<void(string)> handler)
+        : Option(name, shortName, param, help), handler(handler) { }
+};
+
+void Option0::parse(optional<string> param) const
+{
+    if (param.has_value())
+    {
+        throw OptionError("Option \"--{}\" expects no value.", name);
     }
-    throw runtime_error("sigwait failed...?!?! What do I do now??");
+    handler();
 }
 
-/* Check if there's an orphan's pid available on the queue and return it by
- * reference if there is (and return true). Otherwise return false. Intended
- * to be used by the Tracer (we'll give this function to it as a callback). */
-bool popOrphan(pid_t& pid) {
-    scoped_lock<mutex> guard(orphansLock);
-    if (orphans.empty()) {
+void Option1::parse(optional<string> param) const
+{
+    if (!param.has_value())
+    {
+        throw OptionError("Option \"--{}\" expects a value.", name);
+    }
+    handler(std::move(param.value()));
+}
+
+/* Describes a group of command line options. Used internally by ArgParser. */
+struct OptionGroup
+{
+    string name;
+    vector<unique_ptr<Option>> options;
+
+    OptionGroup(string_view name) : name(name) { }
+};
+
+/******************************************************************************
+ * ARGPARSER CLASS
+ *****************************************************************************/
+
+/* Provides a nice way to parse command line options automatically. Allows us
+ * to register our options with it via callbacks and whatnot. Exceptions are
+ * the options determining ProgramAction (-i, -r, --inject, --run): these are
+ * hardcoded into the parser (those options affect the structure of the command
+ * line itself, and I don't want to over-engineer this by abstracting that). 
+ * The parser also hardcodes the options for help (-h and --help). */
+class ArgParser
+{
+private:
+    /* Our list of options (split into groups). Could try to use a map<> or
+     * something but who cares about efficient argument parsing! */
+    vector<OptionGroup> _groups;
+    /* See the enum definition. At each point in the argument parsing, this is
+     * the current action that the program is determined to take based on what
+     * we've seen so far. This forms somewhat of a state machine as we're doing
+     * the parsing (e.g., the value dictates what is valid after it). The flags
+     * that determine the program action get special treatment by the parser.*/
+    ProgramAction _action;
+    /* Excludes argv[0]. We're going to be maintaining pointers into this as we
+     * move along and parse everything, so better not resize or modfiy it!. */
+    vector<string> _args;
+    size_t _pos; // index of current argument within the vector
+
+    /* Helps us move along the arguments list. current() returns the current
+     * one and next() moves us to the next one (and returns it). Both of these
+     * return nullopt if the end of the list of arguments has been passed. */
+    optional<string> current() const;
+    optional<string> next();
+
+    /* Helps us find options using different names. Returns null if none. */
+    const Option* find(string_view name) const;
+    const Option* find(char shortName) const;
+
+    /* Prints out the help for all of the program options. */
+    void print_help() const;
+
+    /* Sets the program action to something. Does some checking to see if the
+     * new action clashes with the current value and throws an OptionError if
+     * it does clash. It also manages priority of the actions: so, e.g., if the
+     * current action is EXIT then that can only be replaced with ERROR. */
+    void set_action(ProgramAction newAction);
+
+    /* Internal parsing functions */
+    bool parse_long_flag(string flag);
+    bool parse_short_flags(string flags);
+    bool parse_flag(string flag);
+
+    /* Internal version of parse() that does all the work. This assumes that
+     * _args and _pos have been set up and that _args is non-empty. */
+    bool parse_internal();
+
+public:
+    ArgParser();
+
+    /* All the options added after this (until the next start_new_group call)
+     * will be placed under the provided group name. Returns *this. */
+    void start_new_group(string_view groupName);
+
+    /* Add a command-line option that either does or doesn't take a param and
+     * that either does or doesn't have a shortName. I could reduce the number
+     * of overloads if I used default parameters, but that would require me to
+     * put those parameters last, which I don't want to do. */
+    void add(string_view name, 
+             char shortName, 
+             string_view param,
+             string_view help, 
+             function<void()> handler);
+
+    void add(string_view name, 
+             string_view param,
+             string_view help, 
+             function<void()> handler);
+
+    void add(string_view name, 
+             char shortName, 
+             string_view param,
+             string_view help, 
+             function<void(string)> handler);
+
+    void add(string_view name, 
+             string_view param,
+             string_view help, 
+             function<void(string)> handler);
+
+    /* Parses the provided argv array (a null-terminated array of arguments,
+     * including argv[0]). argv must contain >= 1 arguments. When done parsing,
+     * the function stores the action that the program should take from then
+     * on (which could be ProgramAction::ERROR if there was an error parsing
+     * the arguments) and returns a vector of the remaining arguments to be
+     * parsed (the parser may stop parsing before the end of argv depending on
+     * the action -- see the comments for enum ProgramAction). */
+    vector<string> parse(const char* argv[], ProgramAction& action);
+
+    /* Option callbacks can call this if they don't want the program to run. */
+    void exit() { set_action(ProgramAction::EXIT); }
+};
+
+ArgParser::ArgParser() : _action(ProgramAction::CMDLINE), _pos(0)
+{
+    string me(program_name());
+    start_new_group("");
+    add("help", 'h', "", "displays this help message",
+        [&]{ print_help(); set_action(ProgramAction::EXIT); });
+    add("run", 'r', "", "run a program in " + me,
+        [&]{ set_action(ProgramAction::RUN); });
+    add("inject", 'i', "", "type '" + me + " -i' for more information",
+        [&]{ set_action(ProgramAction::INJECT); });
+}
+
+optional<string> ArgParser::current() const
+{
+    return _pos >= _args.size() 
+        ? optional<string>() : optional<string>(_args[_pos]);
+}
+
+optional<string> ArgParser::next()
+{
+    _pos++;
+    return current();
+}
+
+const Option* ArgParser::find(string_view name) const
+{
+    for (const OptionGroup& group : _groups)
+    {
+        for (const unique_ptr<Option>& option : group.options)
+        {
+            if (option->name == name)
+            {
+                return option.get();
+            }
+        }
+    }
+    return nullptr;
+}
+
+const Option* ArgParser::find(char shortName) const
+{
+    for (const OptionGroup& group : _groups)
+    {
+        for (const unique_ptr<Option>& option : group.options)
+        {
+            if (option->shortName != '\0' && option->shortName == shortName)
+            {
+                return option.get();
+            }
+        }
+    }
+    return nullptr;
+}
+
+static bool is_valid_name(string_view name)
+{
+    auto isBad = [](char c) { return !isalnum(c) && c != '_' && c != '-'; };
+    return std::find_if(name.begin(), name.end(), isBad) == name.end();
+}
+
+void ArgParser::start_new_group(string_view groupName)
+{
+    _groups.emplace_back(groupName);
+}
+
+void ArgParser::add(string_view name, 
+                          char shortName, 
+                          string_view param,
+                          string_view help, 
+                          function<void()> handler)
+{
+    assert(is_valid_name(name));
+    assert(!find(name));
+    assert(!find(shortName));
+    assert(!_groups.empty());
+    _groups.back().options.push_back(std::make_unique<Option0>(
+        name, shortName, param, help, handler
+    ));
+}
+
+void ArgParser::add(string_view name, 
+                          string_view param,
+                          string_view help, 
+                          function<void()> handler)
+{
+    add(name, '\0', param, help, handler);
+}
+
+void ArgParser::add(string_view name, 
+                          char shortName, 
+                          string_view param,
+                          string_view help, 
+                          function<void(string)> handler)
+{
+    assert(is_valid_name(name));
+    assert(!find(name));
+    assert(!find(shortName));
+    assert(!_groups.empty());
+    _groups.back().options.push_back(std::make_unique<Option1>(
+        name, shortName, param, help, handler
+    ));
+}
+
+void ArgParser::add(string_view name, 
+                          string_view param,
+                          string_view help, 
+                          function<void(string)> handler)
+{
+    add(name, '\0', param, help, handler);
+}
+
+void ArgParser::print_help() const
+{
+    string_view me = program_name();
+    std::cerr 
+        << "Start in interactive mode:\n"
+        << "  " << me << " [OPTIONS...]\n"
+        << "\n"
+        << "Run a program from start to finish:\n"
+        << "  " << me << " [OPTIONS...] -r program [ARGS...]\n"
+        << "\n"
+        << "Compile a program so that " << me << " can get more information:\n"
+        << "  " << me << " [OPTIONS...] -i [FILES...] -- compiler {ARGS...}\n";
+
+    size_t width = 0, height = 0;
+    get_terminal_size(width, height); // this could fail (and return false)
+
+    for (const OptionGroup& groups : _groups)
+    {
+        std::cerr << groups.name << '\n';
+        for (const unique_ptr<Option>& opt : groups.options)
+        {
+            string line = "  ";
+            if (opt->shortName != '\0')
+            {
+                line += format(fmt::emphasis::bold, "-{} ", opt->shortName);
+            }
+            line += format(fmt::emphasis::bold, "--{}", opt->name);
+            if (!opt->param.empty())
+            {
+                line += '=' + opt->param;
+            }
+            line = pad(line, 20);
+
+            if (width == 0 || line.size() + opt->help.size() > width)
+            {
+                std::cerr << line << '\n';
+                std::cerr << wrap_text(opt->help, width, 4);
+            }
+            else
+            {
+                std::cerr << line << opt->help << '\n';
+            }
+        }
+        std::cerr << '\n';
+    }
+}
+
+void ArgParser::set_action(ProgramAction action)
+{
+    if ((action == ProgramAction::RUN && _action == ProgramAction::INJECT)
+        || (action == ProgramAction::INJECT && _action == ProgramAction::RUN))
+    {
+        throw OptionError("The run and inject options are mutually exclusive.");
+    }
+    if (_action == ProgramAction::ERROR)
+    {
+        return; // can't override this one
+    }
+    if (_action == ProgramAction::EXIT)
+    {
+        return; // next highest priority
+    }
+    _action = action;
+}
+
+bool ArgParser::parse_long_flag(string flag)
+{
+    assert(starts_with(flag, "--"));
+    flag = flag.substr(2);
+
+    optional<string> value;
+    size_t equalsPos = flag.find('=');
+    if (equalsPos != string::npos)
+    {
+        value = {flag.substr(equalsPos + 1)};
+        flag = flag.substr(0, equalsPos);
+    }
+
+    const Option* opt = find(flag);
+    if (!opt)
+    {
+        error("The \"--{}\" flag doesn't exist.", flag);
         return false;
     }
-    pid = orphans.front();
-    orphans.pop();
+    opt->parse(value);
     return true;
 }
 
-/* It's the caller's responsibility to close the file. */
-void reaperThread(FILE* fromReaper) {
-    for (;;) {
-        pid_t pid;
-        if (fread(&pid, sizeof(pid), 1, fromReaper) != 1) {
-            break;
+bool ArgParser::parse_short_flags(string flags)
+{
+    assert(starts_with(flags, "-"));
+    for (size_t i = 1; i < flags.size(); ++i)
+    {
+        const Option* opt = find(flags[i]);
+        if (!opt)
+        {
+            error("The '-{}' flag doesn't exist.", flags[i]);
+            return false;
         }
-        if (done) {
-            break;
+        if (i + 1 < flags.size() && flags[i + 1] == '=')
+        {
+            string value = flags.substr(i + 2);
+            opt->parse({value});
+            return true;
         }
-        scoped_lock<mutex> guard(orphansLock);
-        orphans.push(pid);
+        opt->parse({});
     }
-}
-
-/* Execs on success, exits and sends SIGHUP to the tracer on failure. (So this
- * never returns). */
-void execReaper(pid_t child, int pipeToTracer) {
-    try {
-        if (dup2(pipeToTracer, STDOUT_FILENO) == -1) {
-            int e = errno;
-            close(pipeToTracer);
-            throw system_error(e, generic_category(), "dup2");
-        }
-        close(pipeToTracer);
-
-        // First try executing using the path.
-        execlp("reaper", "reaper", 0);
-        // If here, we failed. Try current directory instead.
-        execlp("./reaper", "reaper", 0);
-        // If here, we failed twice. Give up.
-        throw system_error(errno, generic_category(), "execl");
-        /* NOTREACHED */
-    } catch (const exception& e) {
-        kill(child, SIGHUP);
-        waitpid(child, nullptr, 0);
-        cerr << "Failed to exec reaper:" << endl
-            << "  what():  " << e.what() << endl;
-        _exit(1);
-        /* NOTREACHED */
-    }
-}
-
-FILE* startReaper() {
-    int reapPipe[2];
-    if (pipe(reapPipe) == -1) {
-        throw system_error(errno, generic_category(), "pipe");
-    }
-    // We need the close-on-exec flag so that the (read end of the) reap pipe 
-    // doesn't persist (a) in the reaper process and (b) when this process
-    // fork-execs tracees later on during its execution.
-    if (fcntl(reapPipe[0], F_SETFD, FD_CLOEXEC) == -1) {
-        int e = errno;
-        close(reapPipe[0]);
-        close(reapPipe[1]);
-        throw system_error(e, generic_category(), "fcntl");
-    }
-
-    pid_t child = fork();
-    if (child == -1) {
-        int e = errno;
-        close(reapPipe[0]);
-        close(reapPipe[1]);
-        throw system_error(e, generic_category(), "fork");
-    }
-    if (child != 0) {
-        // we're the parent
-        execReaper(child, reapPipe[1]);
-        /* NOTREACHED */
-    }
-
-    // we're the child
-    close(reapPipe[1]);
-
-    // not super essential - just for convenience
-    if (prctl(PR_SET_PDEATHSIG, SIGHUP) == -1) {
-        int e = errno;
-        close(reapPipe[0]);
-        throw system_error(e, generic_category(), "prctl");
-    }
-
-    FILE* fromReaper = fdopen(reapPipe[0], "r");
-    if (!fromReaper) {
-        int e = errno;
-        close(reapPipe[0]);
-        throw system_error(e, generic_category(), "fdopen");
-    }
-    return fromReaper;
-}
-
-void joinThreads(thread& reapThread, FILE* reaperPipe, thread& sigThread) {
-    // set the global flag to true so the threads know to exit
-    done = true;
-
-    // However the threads are probably blocking on read() and sigwait()
-    // respectively, so we need to cause those to unblock. We send SIGINT
-    // to this process to cause the signal thread to unblock and exit. Even
-    // if the signal thread isn't currently blocking, it doesn't matter, since
-    // the signal will go onto the pending queue and be delivered when ready.
-    kill(getpid(), SIGINT);
-
-    // To make the reading thread exit, we set the read() file descriptor to
-    // be non-blocking so that future calls to read() end immediately. We then
-    // interrupt the current read() call with a signal (SA_RESTART not set).
-    int flags = fcntl(fileno(reaperPipe), F_GETFL);
-    if (flags == -1) {
-        throw system_error(errno, generic_category(), "fcntl");
-    }
-    if (fcntl(fileno(reaperPipe), F_SETFL, flags | O_NONBLOCK) == -1) {
-        throw system_error(errno, generic_category(), "fcntl");
-    }
-    pthread_kill(reapThread.native_handle(), SIGUSR1);
-
-    // We can now join them without waiting forever ;-)
-    sigThread.join();
-    reapThread.join();
-}
-
-vector<string> getArgs(int argc, const char** argv) {
-    vector<string> args;
-    args.reserve(argc);
-    for (unsigned i = 0; i < argc; ++i) {
-        args.emplace_back(argv[i]);
-    }
-    return args;
-}
-
-void draw(const Process& tree) {
-    Diagram::Options opts(laneWidth, true, false, hideNonFatalSignals, false);
-    Diagram diagram(tree, opts);
-
-    if (printDiagramDebug) {
-        diagram.print();
-    }
-
-    if (!diagram.result().print()) {
-        const char* error 
-                = "The diagram could not fit within the screen width.";
-        const char* note
-                = "Consider trying the scrollable TUI view instead.";
-        
-        cout << colourise(error, Colour::RED) << endl;
-        cout << colourise("note: ", Colour::BOLD) << note << endl;
-    }
-
-    if (diagram.truncated()) {
-        const char* error = "The diagram's lane width was too small.";
-        cout << colourise(error, Colour::RED) << endl; 
-    }
-}
-
-bool tryClear(Tracer& tracer, shared_ptr<Process>& tree) {
-    if (!tracer.traceesAlive() && !tree) {
-        return true;
-    }
-
-    if (tracer.traceesAlive()) {
-        cout << tracer.traceeCount() << " tracee(s) will be killed." << endl;
-    }
-    if (tree) {
-        cout << "The current process tree will be erased." << endl;
-    }
-
-    cout << endl << Indent(1) << flush;
-    string input;
-    if (!prompt("Are you sure? (y/N) ", input)) {
-        cout << endl;
-        return false;
-    }
-    cout << endl;
-
-    if (input == "y") {
-        tree = nullptr;
-        tracer.nuke();
-    }
-
     return true;
 }
 
-void tryStartTracee(Tracer& tracer, shared_ptr<Process>& tree,
-        const vector<string>& args) 
+bool ArgParser::parse_flag(string flag)
 {
-    if (args.empty()) {
-        cout << "You must give me a program to execute." << endl;
-        return;
-    }
-    if (tracer.traceesAlive() || tree) {
-        cout << "You must end the current session first." << endl;
-        if (!tryClear(tracer, tree)) {
-            return;
+    assert(starts_with(flag, "-"));
+    try
+    {
+        if (starts_with(flag, "--"))
+        {
+            return parse_long_flag(std::move(flag));
+        }
+        else if (flag.size() > 1)
+        {
+            return parse_short_flags(std::move(flag));
+        }
+        else
+        {
+            error("Invalid argument '-'.");
+            return false;
         }
     }
-    tree = tracer.start(args);
-}
-
-void tryMarch(Tracer& tracer) {
-    if (!tracer.traceesAlive()) {
-        cout << "There are no active tracees." << endl;
-    }
-    tracer.march();
-}
-
-void tryGo(Tracer& tracer) {
-    if (!tracer.traceesAlive()) {
-        cout << "There are no active tracees." << endl;
-    } else {
-        tracer.go();
+    catch (const std::exception& e)
+    {
+        error("{}", e.what());
+        return false;
     }
 }
 
-void printKey() {
-    cout << colourise("~~~~~~~~~~~~~ KEY ~~~~~~~~~~~~~", Colour::BOLD) << endl;
-    cout << colourise(" E ", EXEC_COLOUR) << " successful exec" << endl;
-    cout << colourise(" E ", BAD_EXEC_COLOUR) << " failed exec" << endl;
-    cout << colourise(" x ", SIGNAL_COLOUR) << " received a signal" << endl;
-    cout << colourise(" x ", SIGNAL_SEND_COLOUR) 
-            << " called kill/tgkill/tkill" << endl;
-    cout << colourise("i-- waited for specific child", Colour::BOLD) << endl;
-    cout << colourise("w-- waited for any child", Colour::BOLD) << endl;
-    cout << colourise("g-- waited for child in group", Colour::BOLD) << endl;
-    cout << colourise(" w ", BAD_WAIT_COLOUR) 
-            << " failed wait (i, w, or g)" << endl;
-    cout << colourise("--- reaped, exited", EXITED_COLOUR) << endl;
-    cout << "(" << colourise("x", EXITED_COLOUR) << ")" 
-            << " orphaned, exited" << endl;
-    cout << colourise("~~~ reaped, signaled", KILLED_COLOUR) << endl;
-    cout << "[" << colourise("x", KILLED_COLOUR) << "]"
-            << " orphaned, signaled" << endl;
-    cout << colourise("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~", Colour::BOLD) << endl;
-}
-
-bool tryQuit(const Tracer& tracer, bool dueToEOF) {
-    if (!tracer.traceesAlive()) {
-        if (dueToEOF) {
-            cout << "EOF" << endl;
-        }
-        return true; 
-    }
-
-    cout << "Quitting will cause all tracees to be killed." << endl;
-    cout << endl << Indent(1) << flush;
-    
-    string result;
-    if (!prompt("Are you sure? (y/N) ", result)) {
-        cout << "EOF" << endl;
-        return true;
-    }
-    cout << endl;
-
-    if (result == "y") {
-        return true;
-    }
-
-    return false;
-}
-
-void marchAndDraw(Tracer& tracer, const Process& tree) {
-    bool aliveBefore = tracer.traceesAlive();
-    tryMarch(tracer);
-    if (aliveBefore) {
-        draw(tree);
-    }
-}
-
-void quitCommand(Tracer& tracer) {
-    if (tryQuit(tracer, false)) {
-        throw QuitCommandLoop(); // command.cpp will intercept this
-    }
-}
-
-void killCommand(Tracer& tracer, const vector<string>& args) {
-    if (args.empty()) {
-        tracer.killAll();
-    } else if (args.size() == 1) {
-        if (kill(parseNumber<pid_t>(args.at(0)), SIGKILL) == -1) {
-            throw system_error(errno, generic_category(), "kill");
-        }
-    } else {
-        throw runtime_error("usage: kill [pid]");
-    }
-}
-
-void setLaneWidth(unsigned width) {
-    if (width < 2) {
-        throw runtime_error("The lane width must be at least 2.");
-    }
-    laneWidth = width;
-}
-
-const string& getSingleArg(const vector<string>& args) {
-    if (args.size() != 1) {
-        throw runtime_error("This command expects 1 argument.");
-    }
-    return args.at(0);
-}
-
-const Process& getTree(shared_ptr<Process>& tree) {
-    if (!tree) {
-        throw runtime_error("The process tree is empty.");
-    }
-    return *tree.get();
-}
-
-shared_ptr<Process>& getTreePtr(shared_ptr<Process>& tree) {
-    if (!tree) {
-        throw runtime_error("The process tree is empty.");
-    }
-    return tree;
-}
-
-void restart(Tracer& tracer, shared_ptr<Process>& tree) {
-    assert(tree->getEventCount() > 0);
-    auto exec = dynamic_cast<const ExecEvent*>(&tree->getEvent(0));
-    assert(exec && exec->succeeded());
-    vector<string> args = exec->args;
-    tracer.nuke();
-    tree = tracer.start(args);
-}
-
-/* Return a string describing the currently selected event on the diagram. */
-string getEventLine(const Event* selected) {
-    if (!selected) {
-        return "";
-    }
-    if (!selected->loc) {
-        return selected->toString();
-    }
-    ostringstream oss;
-    oss << selected->toString() << " @ " << selected->loc->toString();
-    return oss.str();
-}
-
-/* Return a string describing the currently selected process on the diagram. */
-string getProcessLine(const Process* selected, int eventIndex) {
-    if (!selected) {
-        return "";
-    }
-    ostringstream oss;
-    oss << "process " << selected->pid() << ' ' 
-        << selected->commandLine(eventIndex + 1); // TODO explain
-    return oss.str();
-}
-
-/* Take a key press and figure out the new position (in terms of line and lane
- * coordinates) for the cursor on the diagram. Will handle clipping at edges of
- * the diagram. Returns true if the new values of lane and line were changed
- * from what they previous were (and modifies them correspondingly). */
-bool updateDiagramLocation(const Diagram& diagram, int key, size_t& lane, 
-        size_t& line) 
+/* This function assumes _args is non-empty and _pos has been set to 0. */
+bool ArgParser::parse_internal()
 {
-    size_t newLane = lane, newLine = line;
-    switch (key) {
-        case KEY_LEFT: 
-            newLane = max(lane, 1UL) - 1; 
-            break;
-        case KEY_RIGHT: 
-            newLane += 1; 
-            break;
-        case KEY_UP: 
-            newLine = max(line, 1UL) - 1; 
-            break;
-        case KEY_DOWN: 
-            newLine += 1; 
-            break;
-        default: 
-            assert(!"Unreachable");
+    do
+    {
+        string arg = current().value();
+        // Handle the separator case straight away. If we're seeing it, then
+        // we must be in RUN mode (in INJECT mode we would've already stopped
+        // parsing and let the INJECT code handle the separator).
+        if (arg == "--")
+        {
+            if (_action != ProgramAction::RUN)
+            {
+                error("Unexpected use of the separator '--' without the run "
+                    "or inject options set before it.");
+                return false;
+            }
+            next(); // skip the separator
+            return true;
+        }
+        if (starts_with(arg, "-"))
+        {
+            if (!parse_flag(std::move(arg)))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            // This must be the start of the command that we need to execute.
+            set_action(ProgramAction::RUN);
+            return true;
+        }
+        if (_action == ProgramAction::INJECT)
+        {
+            // If we hit an inject flag, then we'll let the INJECT code handle
+            // the rest of the program's arguments.
+            next(); // skip the inject flag
+            return true;
+        }
     }
-    newLane = min(newLane, diagram.laneCount() - 1);
-    newLine = min(newLine, diagram.lineCount() - 1);
-
-    if (newLane != lane || newLine != line) {
-        lane = newLane;
-        line = newLine;
-        return true;
+    while (next());
+    if (_action == ProgramAction::RUN)
+    {
+        error("Expected more arguments: I need a command to run.");
+        return false;
     }
-    return false;
+    return true;
 }
 
-void doScrollView(Tracer& tracer, shared_ptr<Process>& tree) {
-    Diagram::Options opts(laneWidth, true, false, hideNonFatalSignals, false);
-    // We'll destroy and update this diagram as we need to
-    auto diagram = make_unique<Diagram>(*tree.get(), opts);
+vector<string> ArgParser::parse(const char* argv[], ProgramAction& action)
+{
+    _action = ProgramAction::CMDLINE; // default action
+    _args.clear();
+    _pos = 0;
 
-    if (diagram->truncated()) {
-        const char* error = "The diagram's lane width was too small.";
-        cout << colourise(error, Colour::RED) << endl;
-
-        string dummy; // current mood
-        if (!prompt("Press ENTER to continue...", dummy)) {
-            return;
-        }
+    assert(argv[0] != nullptr);
+    for (const char** argp = &argv[1]; *argp != nullptr; ++argp)
+    {
+        _args.emplace_back(*argp);
+    }
+    if (_args.empty())
+    {
+        action = ProgramAction::CMDLINE;
+        return {};
     }
 
-    assert(tree->getEventCount() > 0);
-    size_t line = 0, lane = 0, x, y;
-    int eventIndex;
-    const Process* process = tree.get();
-    const Event* selected = diagram->find(lane, line, process, eventIndex);
-    diagram->getCoords(lane, line, x, y); // convert to x/y coords
+    bool success = parse_internal();
 
-    auto onKeyPress = [&](ScrollView& view, int key) {
-        switch (key) {
-            case 'n':
-                if (!tracer.traceesAlive()) {
-                    view.beep();
-                }
-                tracer.march();
-                diagram = make_unique<Diagram>(*tree.get(), opts);
-                view.update(diagram->result());
-                lane = (process ? diagram->locate(*process) : lane);
-                selected = diagram->find(lane, line, process, eventIndex);
-                diagram->getCoords(lane, line, x, y);
-                view.setCursor(x, y);
-                break;
-            case 'r':
-            case 'a':
-                restart(tracer, tree);
-                if (key == 'a') tracer.go();
-                diagram = make_unique<Diagram>(*tree.get(), opts);
-                view.update(diagram->result());
-                line = lane = 0;
-                process = tree.get();
-                selected = diagram->find(lane, line, process, eventIndex);
-                diagram->getCoords(lane, line, x, y);
-                view.setLine(getProcessLine(process, eventIndex), 0);
-                view.setLine(getEventLine(selected), 1);
-                view.setCursor(x, y); // make the cursor point to that location
-                break;
-            case KEY_LEFT:
-            case KEY_RIGHT:
-            case KEY_UP:
-            case KEY_DOWN:
-                if (!updateDiagramLocation(*diagram.get(), key, lane, line)) {
-                    view.beep();
-                }
-                selected = diagram->find(lane, line, process, eventIndex);
-                diagram->getCoords(lane, line, x, y);
-                view.setLine(getProcessLine(process, eventIndex), 0);
-                view.setLine(getEventLine(selected), 1);
-                view.setCursor(x, y);
-                break;
-            case 'q':
-                view.quit();
-                break;
-            default:
-                view.beep();
-                break;
-        }
+    // Erase the arguments up until where we finished parsing so that we can
+    // return the remaining arguments to the caller.
+    assert(_pos <= _args.size());
+    _args.erase(_args.begin(), _args.begin() + _pos);
+
+    action = (success ? _action : ProgramAction::ERROR);
+    return std::move(_args); // will clear _args
+}
+
+/******************************************************************************
+ * INJECT ACTION
+ *****************************************************************************/
+
+/* Print the description of the inject option. */
+void inject_option_usage()
+{
+    string programName(program_name());
+    std::cerr << "usage: " << programName
+        << " [OPTIONS...] -i [FILES...] -- compiler {ARGS...}\n\n";
+
+    string text1 = 
+    "The inject option takes a compiler command and runs it, while injecting "
+    "code into each of the source files so that " + programName + " can "
+    "trace the source locations where all the events happen (yes, programs "
+    "like gdb don't need to do this, but doing what gdb does takes a lot of "
+    "effort to implement)."
+    "\n\n"
+    "The injected code is done with #includes, so will only work on the "
+    "source files. This option only supports C/C++. By default, the inject "
+    "option will search for files in the compiler arguments with the "
+    "following extensions:";
+    string text2 = ".c .h .cpp .hpp .cc .hh .cxx .hxx";
+    string text3 =
+    "Note that this option will not modify the specified source files (not "
+    "even temporarily). It uses some ptrace magic to alter what the compiler "
+    "reads."
+    "\n\n"
+    "The inject option should be separated from the compiler command with two "
+    "dashes ('--'). In between the -i option and these dashes, you can insert "
+    "names of files (in the compiler command) that should be injected. If any "
+    "files are specified, then they override the default behaviour seen above."
+    "\n\n"
+    "The injections use preprocessor macros to insert a special syscall with "
+    "an invalid syscall number after each of the relevant functions which "
+    + programName + " can latch onto. This syscall will silently fail in "
+    "normal operation. Since ptracing is on a per-thread basis, this works "
+    "for multi-threaded programs."
+    "\n\n"
+    "The following syscalls (actually, the C library wrappers for them) are "
+    "traced:";
+    string text4 =
+    "fork, kill, raise, tkill, tgkill, wait, waitpid, waitid, wait3, " 
+    "wait4, execv, execvp, execve, execl, execlp, execle, execvpe";
+
+    std::cerr << wrap_text_to_screen(text1, true, 0, 79) << '\n' 
+        << wrap_text_to_screen(text2, false, 4, 79) << '\n'
+        << wrap_text_to_screen(text3, true, 0, 79) << '\n' 
+        << wrap_text_to_screen(text4, false, 4, 79) << '\n';
+}
+
+/* Searches the arguments of the provided compiler argv list for files that
+ * contain C/C++ file extensions (which we will inject into) and return a list
+ * of those items. Will skip argv[0] when searching (i.e., the compiler). */
+vector<string> find_inject_files(const vector<string>& argv)
+{
+    vector<string_view> exts = {
+        ".c", ".h", ".cpp", ".hpp", ".cc", ".hh", ".cxx", ".hxx"
     };
-
-    string help = "Arrow keys to navigate, "
-        "q to quit, n to step, "
-        "r to restart, a to re-run";
-    setLogEnabled(false);
-    ScrollView view(diagram->result(), move(help), onKeyPress);
-    view.setLine(getProcessLine(process, eventIndex), 0);
-    view.setLine(getEventLine(selected), 1);
-    view.setCursor(x, y); // make the cursor point to that location
-    view.run();
-    setLogEnabled(true);
-}
-
-void doFastDiagram(Tracer& tracer, shared_ptr<Process>& tree,
-        const char** childArgs) 
-{
-    try {
-        /* If we've been given a program then load it up for them and run it
-         * until everything dies or we are told to stop. */
-        tree = tracer.start(childArgs);
-        tracer.go();
-
-        /* If there's still tracees alive, then let the user take control. */
-        if (tracer.traceesAlive()) {
-            commandLoop(PROMPT);
-        } else {
-            hideNonFatalSignals = true;
-            printKey();
-            draw(*tree.get());
-
-            const char* notes[] =
-                {"To access the command-line, re-run me with no arguments.",
-                "You'll be able get the scrollable view with these commands:\n"
-                "\trun <program> [args...]\n"
-                "\tview\n"
-                "You can also type 'help' to get a full list of commands."};
-            cout << colourise("note: ", Colour::BOLD) << notes[0] << endl;
-            cout << colourise("note: ", Colour::BOLD) << notes[1] << endl;
+    vector<string> files;
+    for (size_t i = 1; i < argv.size(); ++i)
+    {
+        for (string_view ext : exts)
+        {
+            if (ends_with(argv.at(i), ext))
+            {
+                files.push_back(argv.at(i));
+            }
         }
-    } catch (const exception& e) {
-        cout << colourise("error: ", Colour::RED_BOLD) << e.what() << endl;
+    }
+    return files;
+}
+
+/* Called when forktrace was called with the inject option. args must contain
+ * all of the command-line arguments after the -i flag. On succes, the inject 
+ * action is done. On failure, false is returned. */
+bool handle_inject_action(vector<string> args)
+{
+    // Split the remaining arguments using the separator into two vectors
+    // usage: forktrace -i [FILES...] -- compiler {ARGS...}
+    // We'll expect the compiler command to have at least one argument
+    auto sep = std::find(args.begin(), args.end(), "--");
+    if (sep == args.end())
+    {
+        inject_option_usage();
+        return false;
+    }
+    vector<string> files(args.begin(), sep);
+    vector<string> cmd(sep + 1, args.end());
+
+    // We expect the compile command to have at least one parameter
+    if (cmd.size() < 2) // code further down relies on this
+    {
+        inject_option_usage();
+        return false;
+    }
+    for (auto it = files.begin(); it != files.end();)
+    {
+        if (!it->empty() && (*it)[0] == '-')
+        {
+            warning("'{}' looks like it's supposed to be an option, but "
+                "it's being interpreted as a file.", *it);
+        }
+        // can skip argv[0] since we checked earlier that cmd.size() >= 2
+        if (std::find(cmd.begin() + 1, cmd.end(), *it) == cmd.end())
+        {
+            warning("File '{}' was listed to be injected but wasn't found "
+                "in the compiler's arguments. Ignoring.", *it);
+            it = files.erase(it); // Iterator now points to next item.
+            if (files.empty())
+            {
+                error("No files to inject. Stopping.");
+                return false;
+            }
+            continue;
+        }
+        ++it;
+    }
+    if (files.empty())
+    {
+        files = find_inject_files(cmd); // search based on file extensions
+    }
+    // Now pass the parsed arguments off for the magic to happen
+    return do_inject(std::move(files), std::move(cmd));
+}
+
+/******************************************************************************
+ * COMMAND LINE OPTIONS & MAIN()
+ *****************************************************************************/
+
+/* This feature is useful for debugging */
+void diagnose_status(int status)
+{
+    if (WIFEXITED(status))
+    {
+        std::cerr << format("exited with {}\n", WEXITSTATUS(status));
+    }
+    else if (WIFSIGNALED(status))
+    {
+        std::cerr << format("killed by {} ({})\n", 
+            get_signal_name(WTERMSIG(status)), WTERMSIG(status));
+    }
+    else if (WIFSTOPPED(status))
+    {
+        if (IS_FORK_EVENT(status))
+        {
+            std::cerr << "fork event\n";
+        }
+        else if (IS_EXEC_EVENT(status))
+        {
+            std::cerr << "exec event\n";
+        }
+        else if (IS_CLONE_EVENT(status))
+        {
+            std::cerr << "clone event\n";
+        }
+        else if (IS_EXIT_EVENT(status))
+        {
+            std::cerr << "exit event\n";
+        }
+        else if (IS_SYSCALL_EVENT(status))
+        {
+            std::cerr << "syscall event\n";
+        }
+        else
+        {
+            std::cerr << format("stopped by {} ({})\n", 
+                get_signal_name(WSTOPSIG(status)), WSTOPSIG(status));
+        }
+    }
+    else
+    {
+        std::cerr << "no clue what that is\n";
     }
 }
 
-void registerCommands(Tracer& tracer, shared_ptr<Process>& tree) {
-    registerCommand(
-        "quit",
-        [&] { quitCommand(tracer); },
-        "exits this program (asks for confirmation if tracees are alive)"
+/* This feature is useful for debugging */
+void print_syscall(int syscall)
+{
+    std::cerr << format("{} ({} args)\n", get_syscall_name(syscall), 
+        get_syscall_arg_count(syscall));
+}
+
+/* Registers all of our command line options with the argparser. */
+void register_options(ArgParser& parser, ForktraceOpts& settings)
+{
+    parser.add("no-colour", 'c', "", "disables colours", 
+        []{ set_colour_enabled(false); }
     );
-    registerCommandWithArgs(
-        "start",
-        [&](vector<string> args) { tryStartTracee(tracer, tree, args); },
-        "starts a tracee from its command line arguments"
+    parser.add("no-reaper", "", "disables the sub-reaper process",
+        [&]{ settings.reaper = false; }
     );
-    registerCommand(
-        "tree",
-        [&] { getTree(tree).printTree(); },
-        "print the current process tree"
+    parser.add("status", "STATUS", "diagnose a wait(2) status",
+        [&](string s) { diagnose_status(parse_number<int>(s)); parser.exit(); }
     );
-    registerCommand(
-        "list",
-        [&] { tracer.printList(); },
-        "print a list of active tracees"
+    parser.add("syscall", "NUMBER", "print info about a syscall number",
+        [&](string s) { print_syscall(parse_number<int>(s)); parser.exit(); }
     );
-    registerCommand(
-        "draw",
-        [&] { draw(getTree(tree)); },
-        "prints the diagram for the process tree to stdout"
+
+    parser.start_new_group("Logging options");
+
+    parser.add("verbose", 'v', "", "shows more information than usual",
+        []{ set_log_category_enabled(Log::VERB, true); }
     );
-    registerCommand(
-        "next",
-        [&] { marchAndDraw(tracer, getTree(tree)); },
-        "equivalent to \"march\" followed by \"draw\"",
-        true
-    );
-    registerCommand(
-        "go",
-        [&] { tryGo(tracer); },
-        "continues all tracees until they are dead or halted"
-    );
-    registerCommandWithArgs(
-        "run",
-        [&](vector<string> args) {
-            tryStartTracee(tracer, tree, args);
-            tracer.go();
-        },
-        "same as \"start program [args...]\" followed by \"go\""
-    );
-    registerCommand(
-        "march",
-        [&] { tryMarch(tracer); },
-        "resume all tracees, then wait for them all to stop",
-        true
-    );
-    registerCommandWithArgs(
-        "step",
-        [&](vector<string> args) { 
-            tracer.step(parseNumber<pid_t>(getSingleArg(args)));
-        },
-        "resumes specified pid, then waits for it to stop",
-        true
-    );
-    registerCommandWithArgs(
-        "kill",
-        [&](vector<string> args) { 
-            killCommand(tracer, args);
-        },
-        "kill specified pid with SIGKILL, or all tracees if none specified"
-    );
-    registerCommand(
-        "clear",
-        [&] { tryClear(tracer, tree); },
-        "SIGKILL and erase all the tracees and clear the process tree"
-    );
-    registerCommand(
-        "key",
-        [] { printKey(); },
-        "print the key for the diagram"
-    );
-    registerCommandWithArgs(
-        "view",
-        [&](vector<string> args) { 
-            doScrollView(tracer, getTreePtr(tree)); 
-        },
-        "displays the diagram of the process tree in a scrollable window"
-    );
-    registerCommandWithArgs(
-        "colour",
-        [](vector<string> args) {
-            setColourEnabled(parseBool(getSingleArg(args)));
-        },
-        "globally enable or disable colours"
-    );
-    registerCommandWithArgs(
-        "lane-width",
-        [](vector<string> args) {
-            setLaneWidth(parseNumber<unsigned>(getSingleArg(args)));  
-        },
-        "set the width of each lane of the diagram"
-    );
-    registerCommandWithArgs(
-        "hide-non-fatal",
-        [&](vector<string> args) {
-            hideNonFatalSignals = parseBool(getSingleArg(args));
-        },
-        "enable/disable showing non-fatal signals on the diagram"
-    );
-    registerCommandWithArgs(
-        "merge-execs",
-        [](vector<string> args) { 
-            setExecMergingEnabled(parseBool(getSingleArg(args))); 
-        },
-        "enable/disable merging of consecutive bad execs of the same file"
-    );
-    registerCommandWithArgs(
-        "debug",
-        [](vector<string> args) {
-            setDebugLogLevel(parseNumber<unsigned>(getSingleArg(args)));
-        },
-        "set debug log level to: 0=none, 1=enabled, 2=verbose"
+    parser.add("debug", 'd', "", "shows debugging log messages", 
+        []{ set_log_category_enabled(Log::DBG, true); }
     );
 }
 
-int main(int argc, const char** argv) {
-    atexit(restoreTerminal);
-    registerSignals();
-
-    /* Block SIGINT so it doesn't kill us (we want to sigwait it). We need to
-     * do this before creating the sigwait thread and the reaper thread (via
-     * startReaper) so that all threads inherit it. */
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGINT);
-    pthread_sigmask(SIG_BLOCK, &set, nullptr);
-
-    /* This will fork the reaper process as the parent. When the call is done,
-     * we will be running as the child!!! (We'll have a different PID!!!) This
-     * function throws on failure, so it doesn't return NULL. */
-    FILE* reaperPipe = startReaper();
-    cout << "Hello, I'm " << getpid() << endl;
-    /* Start the reaper thread, which reads from pipe onto the queue. */
-    thread reapThread(&reaperThread, reaperPipe);
-
-    /* Create the tracer and tell it how it can find out about orphans from
-     * us by giving it a callback function. */
-    Tracer tracer(getArgs(argc, argv), popOrphan);
-
-    /* Start our waiting thread for SIGINT. */
-    thread sigThread(signalThread, ref(tracer), set);
-
-    /* The root of our current process tree. */
-    shared_ptr<Process> tree;
-
-    initCommands([&]{ return !tryQuit(tracer, true); }); // EOF handler
-    registerCommands(tracer, tree);
-    if (argc > 1) {
-        doFastDiagram(tracer, tree, &argv[1]);
-    } else {
-        commandLoop(PROMPT);
+bool do_all_the_things(int argc, const char** argv)
+{
+    if (!init_log(argv[0])) // makes sure argv[0] isn't null :-)
+    {
+        return false;
     }
 
-    joinThreads(reapThread, reaperPipe, sigThread); 
-    fclose(reaperPipe);
-    return 0;
+    ForktraceOpts settings;
+    ArgParser parser;
+    register_options(parser, settings);
+
+    ProgramAction action;
+    vector<string> remainingArgs = parser.parse(argv, action);
+
+    switch (action)
+    {
+    case ProgramAction::RUN:
+    case ProgramAction::CMDLINE:
+        return forktrace(std::move(remainingArgs), settings);
+    case ProgramAction::INJECT:
+        return handle_inject_action(std::move(remainingArgs));
+    case ProgramAction::EXIT:
+        return true;
+    case ProgramAction::ERROR:
+        return false;
+    default:
+        assert(!"Unreachable");
+    }
+}
+
+int main(int argc, const char** argv) 
+{
+    return do_all_the_things(argc, argv) ? 0 : 1;
 }
