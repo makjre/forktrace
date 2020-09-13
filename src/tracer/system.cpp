@@ -1,3 +1,9 @@
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  system
+ *
+ *      TODO
+ */
 #include "system.hpp"
 #include "util.hpp"
 

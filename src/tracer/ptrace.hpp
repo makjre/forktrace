@@ -1,5 +1,11 @@
-#ifndef FORKTRACE_PTRACE_H
-#define FORKTRACE_PTRACE_H
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  ptrace
+ *
+ *      TODO
+ */
+#ifndef FORKTRACE_PTRACE_HPP
+#define FORKTRACE_PTRACE_HPP
 
 #include <vector>
 #include <string>
@@ -97,4 +103,4 @@ bool which_syscall(pid_t pid, int& syscall, size_t args[SYS_ARG_MAX]);
  * system_error on failure or returns false if the tracee doesn't exist. */
 bool get_syscall_ret(pid_t pid, size_t& retval);
 
-#endif /* FORKTRACE_PTRACE_H */
+#endif /* FORKTRACE_PTRACE_HPP */

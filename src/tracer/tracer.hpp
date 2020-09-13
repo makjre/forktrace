@@ -1,5 +1,11 @@
-#ifndef TRACER_H
-#define TRACER_H
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  tracer
+ *
+ *      TODO
+ */
+#ifndef FORKTRACE_TRACER_HPP
+#define FORKTRACE_TRACER_HPP
 
 #include <memory>
 #include <unordered_map>
@@ -165,4 +171,4 @@ public:
     bool tracees_alive() const { return !_tracees.empty(); }
 };
 
-#endif /* TRACER_H */
+#endif /* FORKTRACE_TRACER_HPP */

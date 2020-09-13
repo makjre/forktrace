@@ -1,3 +1,9 @@
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  parse
+ *
+ *      TODO
+ */
 #include <algorithm>
 #include <cctype>
 

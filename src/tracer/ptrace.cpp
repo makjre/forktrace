@@ -217,7 +217,7 @@ static void setup_child(string_view program, vector<string> argv)
 /* Kill the specified PID with SIGKILL and reap it so that it's not a zombie.
  * If the PID is not our child, then this function fails silently. If some
  * other error occurs, then a system_error is thrown. PRESERVES ERRNO!!!!. */
-void kill_and_reap(pid_t pid) 
+static void kill_and_reap(pid_t pid) 
 {
     int e = errno;
 
@@ -236,7 +236,7 @@ void kill_and_reap(pid_t pid)
  * SIGSTOP as expected. We take the status that waitpid returned for the tracee
  * and throw an exception to report the tracee's error. `name` specifies the
  * name of the system call that would have failed. */
-[[noreturn]] void throw_failed_start(pid_t pid, int status, string_view name)
+static void throw_failed_start(pid_t pid, int status, string_view name)
 {
     if (WIFEXITED(status)) 
     {

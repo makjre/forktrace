@@ -1,3 +1,9 @@
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  inject
+ *
+ *      TODO
+ */
 #ifndef FORKTRACE_INJECT_HPP
 #define FORKTRACE_INJECT_HPP
 

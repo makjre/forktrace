@@ -1,3 +1,9 @@
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  inject
+ *
+ *      TODO
+ */
 #include <fmt/core.h>
 
 #include "inject.hpp"
