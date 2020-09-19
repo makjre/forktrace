@@ -30,11 +30,6 @@ bool ExecEvent::succeeded() const
     return calls.back().errcode == 0;
 }
 
-void Event::set_location(SourceLocation loc) 
-{
-    location.emplace(std::move(loc));
-}
-
 void Event::print_tree(Indent indent) const 
 {
     std::cerr << format("{}{}\n", indent, to_string());

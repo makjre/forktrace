@@ -66,8 +66,6 @@ struct Event
     Event(Process& owner) : owner(owner) { }
     virtual ~Event() { }
 
-    void set_location(SourceLocation location);
-
     virtual std::string to_string() const = 0;
     virtual void print_tree(Indent indent = 0) const;
     virtual void draw(IEventRenderer& renderer) const = 0; 

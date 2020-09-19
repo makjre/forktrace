@@ -106,7 +106,7 @@ static bool command_line(CommandParser& cmdline)
     }
     catch (const QuitCommandLoop& e)
     {
-        log("Goodbye");
+        log("Goodbye"); // be polite :-)
     }
     return true;
 }
@@ -223,7 +223,8 @@ static FILE* start_reaper()
     // we're the child!!!
     close(reaperPipe[1]);
 
-    // not super essential - just for convenience
+    // We'll die and all the tracees will be killed (due the PTRACE_O_EXITKILL
+    // option being used) if the reaper dies.
     if (prctl(PR_SET_PDEATHSIG, SIGHUP) == -1) 
     {
         error("prctl: {}", strerror_s(errno));
@@ -301,7 +302,7 @@ bool forktrace(vector<string> command, ForktraceOpts settings)
             error("Failed to start reaper.");
             return false;
         }
-        reaper.emplace(reaper_thread, reaperPipe);
+        reaper.emplace(reaper_thread, reaperPipe); // starts the thread
     }
     log("Hello, I'm {}", getpid());
 

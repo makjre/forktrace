@@ -2,7 +2,8 @@
  *
  *  ptrace
  *
- *      TODO
+ *      Functions that do all the tracing for us. I try to keep all the ptrace
+ *      nastiness contained in this file.
  */
 #ifndef FORKTRACE_PTRACE_HPP
 #define FORKTRACE_PTRACE_HPP
@@ -15,7 +16,10 @@
 
 #include "system.hpp"
 
-/* See ptrace(2) man page for where these come from.
+/* See ptrace(2) man page for where these come from. These macros help us
+ * diagnose the wait(2) statuses that we get when the tracee is stopped (so
+ * you should check for WIFSTOPPED(status) first. These macros rely on the
+ * ptrace options set by start_tracee.
  */
 #define IS_EVENT(status, event) (((status) >> 8) == (SIGTRAP | ((event) << 8)))
 #define IS_FORK_EVENT(status) IS_EVENT(status, PTRACE_EVENT_FORK)
@@ -39,7 +43,15 @@
  * system_error if a syscall failed or runtime_error if something weird 
  * happened (e.g., the tracee was killed by an unknown signal). The child 
  * is started within a new process group. Returns the pid of the tracee. 
- * The child is started in a stopped state. */
+ * The child is started in a stopped state. The tracee will be configured
+ * with the following ptrace options (see man 2 ptrace for more details):
+ *
+ *      - PTRACE_O_EXITKILL: If we end, then the tracee gets SIGKILL'ed.
+ *      - PTRACE_O_TRACEFORK: Automatically trace forked children.
+ *      - PTRACE_O_TRACEEXEC: Automatically stop at the next successful exec.
+ *      - PTRACE_O_TRACECLONE: Automatically trace cloned children.
+ *      - PTRACE_O_TRACESYSGOOD: Helps disambiguate syscalls from other events.
+ */
 pid_t start_tracee(std::string_view program, std::vector<std::string> argv);
 
 /* Resumes the traced process. Throws system_error on failure (which will

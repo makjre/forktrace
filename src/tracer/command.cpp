@@ -138,18 +138,27 @@ void CommandParser::help_handler(vector<string> args) const
         std::cerr << wrap_text_to_screen(it->second.help, false, 0);
         return;
     }
+
+    // Calculate the largest width of command name + argments so that we know
+    // what to pad the command help strings to to make it look pretty.
+    size_t padding = 0;
+    for (const auto& [name, command] : _commands)
+    {
+        padding = std::max(padding, name.size() + 1 + command.params.size());
+    }
+    padding += 2;
+
     for (const auto& [name, command] : _commands)
     {
         size_t width = 0, height = 0;
         get_terminal_size(width, height); // this could fail (and return false)
 
-        string line = "  ";
-        line += colour(fmt::emphasis::bold, name);
+        string line = colour(fmt::emphasis::bold, name);
         if (!command.params.empty())
         {
-            line += ' ' + colour(fmt::emphasis::bold, command.params) + "  ";
+            line += ' ' + command.params;
         }
-        line = pad(line, 30);
+        line = "  " + pad(line, padding);
 
         if (width == 0 || line.size() + command.help.size() > width)
         {
@@ -240,7 +249,7 @@ static int hex_to_int(char digit)
 /* Parses an escape sequence (C-style) at the beginning of line (the backslash
  * should already have been skipped). On success, true is returned and the
  * character that was encoded is stored in 'result' and `line` is advanced
- * past the escape sequence with remove_prefix().  On failure, an error message
+ * past the escape sequence with remove_prefix(). On failure, an error message
  * is printed and false is returned. */
 static bool extract_escape(string_view& line, char& result)
 {

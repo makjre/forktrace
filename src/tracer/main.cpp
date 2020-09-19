@@ -276,8 +276,6 @@ ArgParser::ArgParser() : _action(ProgramAction::CMDLINE), _pos(0)
     start_new_group("");
     add("help", 'h', "", "displays this help message",
         [&]{ print_help(); set_action(ProgramAction::EXIT); });
-    add("run", 'r', "", "run a program in " + me,
-        [&]{ set_action(ProgramAction::RUN); });
     add("inject", 'i', "", "type '" + me + " -i' for more information",
         [&]{ set_action(ProgramAction::INJECT); });
 }
@@ -388,21 +386,41 @@ void ArgParser::print_help() const
         << "Start in interactive mode:\n"
         << "  " << me << " [OPTIONS...]\n"
         << "\n"
-        << "Run a program from start to finish:\n"
-        << "  " << me << " [OPTIONS...] -r program [ARGS...]\n"
+        << "Directly run a program in forktrace:\n"
+        << "  " << me << " [OPTIONS...] [--] program [ARGS...]\n"
         << "\n"
         << "Compile a program so that " << me << " can get more information:\n"
-        << "  " << me << " [OPTIONS...] -i [FILES...] -- compiler {ARGS...}\n";
+        << "  " << me << " [OPTIONS...] -i [FILES...] -- compiler {ARGS...}\n"
+        << "\n"
+        << "Use '--' to force " << me << " to stop parsing flags.\n";
 
     size_t width = 0, height = 0;
     get_terminal_size(width, height); // this could fail (and return false)
 
-    for (const OptionGroup& groups : _groups)
+    for (const OptionGroup& group : _groups)
     {
-        std::cerr << groups.name << '\n';
-        for (const unique_ptr<Option>& opt : groups.options)
+        // Calculate padding we'll need to line up the help messages for each
+        // command in this category nicely :-)
+        size_t padding = 0;
+        for (const unique_ptr<Option>& opt : group.options)
         {
-            string line = "  ";
+            size_t width = 2 + opt->name.size();
+            if (!opt->param.empty())
+            {
+                width += 1 + opt->param.size();
+            }
+            if (opt->shortName != '\0')
+            {
+                width += 3;
+            }
+            padding = std::max(padding, width);
+        }
+        padding += 2;
+
+        std::cerr << group.name << '\n';
+        for (const unique_ptr<Option>& opt : group.options)
+        {
+            string line;
             if (opt->shortName != '\0')
             {
                 line += format(fmt::emphasis::bold, "-{} ", opt->shortName);
@@ -412,7 +430,7 @@ void ArgParser::print_help() const
             {
                 line += '=' + opt->param;
             }
-            line = pad(line, 20);
+            line = "  " + pad(line, padding); // ensures trailing space
 
             if (width == 0 || line.size() + opt->help.size() > width)
             {
@@ -523,33 +541,25 @@ bool ArgParser::parse_internal()
     do
     {
         string arg = current().value();
-        // Handle the separator case straight away. If we're seeing it, then
-        // we must be in RUN mode (in INJECT mode we would've already stopped
-        // parsing and let the INJECT code handle the separator).
+        // The separator forces us to stop parsing command line options.
         if (arg == "--")
         {
-            if (_action != ProgramAction::RUN)
-            {
-                error("Unexpected use of the separator '--' without the run "
-                    "or inject options set before it.");
-                return false;
-            }
             next(); // skip the separator
             return true;
         }
+
         if (starts_with(arg, "-"))
         {
             if (!parse_flag(std::move(arg)))
             {
-                return false;
+                return false; // invalid option
             }
         }
         else
         {
-            // This must be the start of the command that we need to execute.
-            set_action(ProgramAction::RUN);
-            return true;
+            return true; // not a flag - stop parsing here
         }
+
         if (_action == ProgramAction::INJECT)
         {
             // If we hit an inject flag, then we'll let the INJECT code handle
@@ -557,13 +567,8 @@ bool ArgParser::parse_internal()
             next(); // skip the inject flag
             return true;
         }
-    }
+    } 
     while (next());
-    if (_action == ProgramAction::RUN)
-    {
-        error("Expected more arguments: I need a command to run.");
-        return false;
-    }
     return true;
 }
 
@@ -590,6 +595,12 @@ vector<string> ArgParser::parse(const char* argv[], ProgramAction& action)
     // return the remaining arguments to the caller.
     assert(_pos <= _args.size());
     _args.erase(_args.begin(), _args.begin() + _pos);
+
+    // Set ourselves to run mode if they gave us a command to run.
+    if (_action == ProgramAction::CMDLINE && !_args.empty())
+    {
+        _action = ProgramAction::RUN;
+    }
 
     action = (success ? _action : ProgramAction::ERROR);
     return std::move(_args); // will clear _args
@@ -787,7 +798,7 @@ void register_options(ArgParser& parser, ForktraceOpts& settings)
     parser.add("no-reaper", "", "disables the sub-reaper process",
         [&]{ settings.reaper = false; }
     );
-    parser.add("status", "STATUS", "diagnose a wait(2) status",
+    parser.add("status", "STATUS", "diagnose a wait(2) child status",
         [&](string s) { diagnose_status(parse_number<int>(s)); parser.exit(); }
     );
     parser.add("syscall", "NUMBER", "print info about a syscall number",

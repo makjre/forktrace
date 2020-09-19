@@ -40,7 +40,7 @@ void Tracee::remove_tracee(Tracer& tracer, pid_t pid)
  * even when the tracee program specifies 'NULL' as the argument to the result
  * value. What we have to do in that case is pick some random readable/writable
  * address in the tracees memory space, and use that for the result instead (we
- * then have to modify the system call to point to that instead. 
+ * then have to modify the system call to point to that instead). 
  *
  * Template arguments:
  *
@@ -309,7 +309,7 @@ void Tracer::handle_failed_fork(Tracee& tracee)
      * act of us exiting will kill all the tracees, since we should have set
      * them up with the PTRACE_O_EXITKILL option). */
     log("{} failed fork: {}", tracee.pid, strerror_s(err));
-    log("Nuking everything with SIGKILL...");
+    log("Nuking everything with SIGKILL and committing suicide :-)");
     _exit(1);
     /* NOTREACHED */
 }

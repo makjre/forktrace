@@ -80,7 +80,8 @@ void Process::add_event_silent(unique_ptr<Event> event, bool consumeLocation)
         "add_event_silent({}) called when state != ALIVE", event->to_string());
     if (_location.has_value() && consumeLocation) 
     {
-        event->set_location(std::move(_location.value()));
+        event->location = std::move(_location);
+        _location.reset();
     }
     _events.push_back(std::move(event));
 }
@@ -96,7 +97,8 @@ void Process::add_event(unique_ptr<Event> event, bool consumeLocation)
     if (_location.has_value() && consumeLocation)
     {
         log("{} @ {}", event->to_string(), _location->to_string());
-        event->set_location(std::move(_location.value()));
+        event->location = std::move(_location);
+        _location.reset();
     }
     else
     {
@@ -229,7 +231,18 @@ void Process::notify_exec(string file, vector<string> args, int errcode)
     // then no biggie, since the user can still see the history of exec calls
     // if they want to). TODO make sure this feature is actually implemented.
     event->calls.emplace_back(file, errcode); // update existing ExecEvent
-    log("{}", event->calls.back().to_string(*event));
+
+    // TODO maybe move printing of location into the event code itself? That
+    // would clean some of this up.
+    string str = event->calls.back().to_string(*event);
+    if (event->location.has_value())
+    {
+        log("{} @ {}", str, event->location->to_string());
+    }
+    else
+    {
+        log("{}", str);
+    }
 }
 
 void Process::notify_ended(int status) 
@@ -292,6 +305,7 @@ void Process::notify_sent_signal(pid_t killedId,
         // Both processes get a handle to the shared kill information
         // The source process consumes their source location (since forktrace.h
         // will update location when kill/tkill/tkill is called).
+        // TODO dodge? check hacked fixes in master branch
         source.add_event(
             make_unique<KillEvent>(source, info, true), true);
         dest->add_event_silent(

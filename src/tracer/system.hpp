@@ -15,7 +15,7 @@
  * you should be able to port to other Unixes, however restructuring may be 
  * in order to make the code more architecture independent. You can forget
  * about porting this to Windows. They don't even have fork ffs. */
-#ifndef __x86_64__
+#if !defined(__x86_64__) || !defined(__linux__)
 #error "I don't support your architecture lol."
 #endif
 

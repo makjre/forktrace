@@ -3,10 +3,11 @@
  *  text-wrap
  *
  *      I hate ugly line wrapping, and hardcoding all the line wrapping for the
- *      various help messages is tiring, so I wrote this 'module' that does it
- *      automatically. There have been whole papers written about how to break
- *      a paragraph into separate lines and there are existing algorithms out
- *      there (I don't know if there's any C/C++ libraries for it).
+ *      various help messages is tiring (and can't adjust to different screen
+ *      widths), so I wrote this 'module' that does it automatically. There are
+ *      whole papers written about how to break a paragraph into separate lines
+ *      and there are existing algorithms out there (I don't know if there's 
+ *      any C/C++ libraries for it - haven't checked).
  *
  *      Just gonna go with a greedy algorithm and I'll mask the deficiencies
  *      by justifying the text and hoping the screen width is wide enough for
@@ -14,7 +15,7 @@
  */
 #include <cassert>
 
-// TODO proof-read this code. lol.
+// TODO proof-read this code. lol. kinda just wrote it all at once...
 
 #include "text-wrap.hpp"
 #include "util.hpp"

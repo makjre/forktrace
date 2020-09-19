@@ -6,7 +6,7 @@ CXX = g++
 CXXFLAGS = -std=c++17 -Wall -g -Iinclude 
 LDFLAGS = -pthread -lncurses -lreadline -lfmt
 CC = gcc
-CFLAGS = -std=gnu99 
+CFLAGS = -std=gnu99 -g
 
 # Flags to generate dependency information
 DEPFLAGS = -MMD -MP -MF"$(@:%.o=%.d)"
@@ -51,7 +51,8 @@ $(BUILD_DIR):
 $(BUILD_DIR)/tracer/%.o: src/tracer/%.cpp | $(BUILD_DIR)
 	$(CXX) -c $(CXXFLAGS) -pedantic $(DEPFLAGS) $< -o $@
 
-# Have a special target for system.cpp since -pedantic is annoying
+# Have a special target for system.cpp since -pedantic is annoying (it gets
+# angry at C-style "designated array initializers" from syscalls.inc).
 $(BUILD_DIR)/tracer/system.o: src/tracer/system.cpp | $(BUILD_DIR)
 	$(CXX) -c $(CXXFLAGS) $(DEPFLAGS) $< -o $@
 

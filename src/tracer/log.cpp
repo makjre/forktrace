@@ -29,6 +29,7 @@ static std::atomic<bool> gColourEnabled = true;
 
 // Colours other settings for our log messages
 constexpr string_view PREFIX = "[forktrace] ";
+constexpr fmt::text_style PREFIX_COLOUR = fg(fmt::color::gray);
 constexpr fmt::text_style ERROR_COLOUR = fg(fmt::color::crimson) | fmt::emphasis::bold;
 constexpr fmt::text_style WARNING_COLOUR = fg(fmt::color::medium_purple) | fmt::emphasis::bold;
 constexpr fmt::text_style DEBUG_COLOUR = fg(fmt::color::gray) | fmt::emphasis::bold;
@@ -73,7 +74,7 @@ void message_internal(optional<Log> logCategory, string_view message)
 {
     string line;
     line.reserve(message.size() + 40);
-    line += PREFIX;
+    line += colour(PREFIX_COLOUR, PREFIX);
     if (logCategory.has_value())
     {
         switch (logCategory.value())
@@ -100,7 +101,7 @@ void message_internal(optional<Log> logCategory, string_view message)
         line.append(message.substr(pos, next - pos + 1));
         std::cerr << line; // TODO cerr thread safe??!?!?!
         pos = next + 1;
-        line = PREFIX; // start off the next line
+        line = colour(PREFIX_COLOUR, PREFIX); // start off the next line
     }
     if (pos < message.size())
     {
@@ -131,5 +132,5 @@ string colour(const fmt::text_style& style, std::string_view str)
     {
         return string(str);
     }
-    return fmt::format(style, FMT_STRING("{}"), str);
+    return fmt::format(style, "{}", str);
 }

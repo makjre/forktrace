@@ -1,3 +1,14 @@
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  ptrace
+ *
+ *      Functions that do all the tracing for us. I try to keep all the ptrace
+ *      nastiness contained in this file.
+ *
+ *      The functions that manipulate memory in the tracee just use ptrace's
+ *      PTRACE_PEEKDATA and PTRACE_POKEDATA options although there are nicer
+ *      (more complicated) methods that would avoid as much context switching.
+ */
 #include <system_error>
 #include <cassert> // TODO don't need
 #include <cerrno>
@@ -177,11 +188,12 @@ static int exit_status_to_errno(int exitStatus)
         case 3:     return EINVAL;
         case 4:     return EIO;
         case 5:     return EPERM;
+        case 6:     return ESRCH;
         default:    return 0;
     }
 }
 
-/* Helper funciton for start(). */
+/* Helper function for start() to exec the traced child process. */
 static void setup_child(string_view program, vector<string> argv)
 {
     if (ptrace(PTRACE_TRACEME, 0, 0, 0) == -1)
@@ -290,11 +302,8 @@ pid_t start_tracee(string_view program, vector<string> argv)
     }
 
     // Ensure that the setpgid call succeeded and then configure the options
-    // that we need when tracing. We'll always have the TRACEFORK etc. options
-    // even if _traceFork, etc. are false (we just manually detach when we hit
-    // a fork event or whatever if _traceFork is false - it just simplifies the
-    // log for handling ptrace events). We'll then leave the tracee stopped for
-    // the caller to resume when they're ready.
+    // that we need when tracing. We'll then leave the tracee stopped for the 
+    // caller to resume when they're ready.
     if (waitpid(pid, &status, 0) == -1)
     {
         throw system_error(errno, generic_category(), "waitpid");
@@ -535,7 +544,7 @@ bool copy_string_array_from_tracee(pid_t pid,
         char* arg = (char*)result;
         if (arg == nullptr) 
         {
-            return true;
+            return true; // we hit the NULL terminator of the array
         }
 
         args.emplace_back();
