@@ -759,16 +759,6 @@ void Tracer::expect_ended(Tracee& tracee)
     handle_wait_notification(tracee, status);
 }
 
-void Tracer::handle_wait_notification(pid_t pid, int status)
-{
-    auto it = _tracees.find(pid);
-    if (it == _tracees.end())
-    {
-        return;
-    }
-    handle_wait_notification(it->second, status);
-}
-
 void Tracer::handle_wait_notification(Tracee& tracee, int status)
 {
     if (WIFEXITED(status) || WIFSIGNALED(status))
