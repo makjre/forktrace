@@ -66,41 +66,6 @@ static void register_signals()
     sigaction(SIGUSR1, &sa, 0);
 }
 
-static void register_commands(CommandParser& parser,
-                              Tracer& tracer,
-                              shared_ptr<Process>& tree)
-{
-    parser.add("colour", "ENABLED", "enable/disable colour",
-        [](string s) { set_colour_enabled(parse_bool(s)); }
-    );
-    parser.add("debug", "ENABLED", "enable/disable debug messages",
-        [](string s) { set_log_category_enabled(Log::DBG, parse_bool(s)); }
-    );
-    parser.add("verbose", "ENABLED", "enable/disable extra log messages",
-        [](string s) { set_log_category_enabled(Log::VERB, parse_bool(s)); }
-    );
-    parser.add("quit", "", "quit " + string(program_name()),
-        [] { throw QuitCommandLoop(); }
-    );
-}
-
-static bool command_line(CommandParser& cmdline)
-{
-    try
-    {
-        while (cmdline.do_command("(ft) "))
-        {
-            // yeet
-        }
-        std::cerr << "EOF\n";
-    }
-    catch (const QuitCommandLoop& e)
-    {
-        log("Goodbye"); // be polite :-)
-    }
-    return true;
-}
-
 static void signal_thread(Tracer& tracer, sigset_t set) 
 {
     int sig;
@@ -248,15 +213,161 @@ static void join_reaper(std::thread& reaper, FILE* reaperPipe)
     reaper.join();
 }
 
-bool run(Tracer& tracer, vector<string> command)
+shared_ptr<Process> do_start(Tracer& tracer, vector<string> args)
 {
-    shared_ptr<Process> tree; // root of the process tree
+    if (args.empty())
+    {
+        throw std::runtime_error("Expected: PROGRAM [ARGS...]");
+    }
+    return tracer.start(args[0], args);
+}
+
+void do_tree(const vector<shared_ptr<Process>>& trees, vector<string> args)
+{
+    if (args.size() > 1)
+    {
+        throw std::runtime_error("Expected no more than one argument.");
+    }
+    if (args.empty())
+    {
+        for (size_t i = 0; i < trees.size(); ++i)
+        {
+            std::cerr << format(fmt::emphasis::bold, "Process tree {}:\n", i);
+            trees[i]->print_tree();
+        }
+    }
+    else
+    {
+        size_t i = parse_number<size_t>(args[0]);
+        if (i >= trees.size())
+        {
+            throw std::runtime_error("Invalid process tree index.");
+        }
+        trees[i]->print_tree();
+    }
+}
+
+void do_trees(const vector<shared_ptr<Process>>& trees)
+{
+    if (trees.empty())
+    {
+        std::cerr << "There are no process trees yet.\n";
+    }
+    for (size_t i = 0; i < trees.size(); ++i)
+    {
+        std::cerr << format("{}: {}\n", i, trees[i]->to_string());
+    }
+}
+
+void do_next(Tracer& tracer)
+{
+    if (!tracer.tracees_alive())
+    {
+        std::cerr << "There are no active tracees.\n";
+    }
+    tracer.step();
+}
+
+static void register_commands(CommandParser& parser,
+                              Tracer& tracer,
+                              vector<shared_ptr<Process>>& trees)
+{
+    parser.add("colour", "ENABLED", "enable/disable colour",
+        [](string s) { set_colour_enabled(parse_bool(s)); }
+    );
+    parser.add("debug", "ENABLED", "enable/disable debug messages",
+        [](string s) { set_log_category_enabled(Log::DBG, parse_bool(s)); }
+    );
+    parser.add("verbose", "ENABLED", "enable/disable extra log messages",
+        [](string s) { set_log_category_enabled(Log::VERB, parse_bool(s)); }
+    );
+    parser.add("list", "", "print a list of all tracees",
+        [&] { tracer.print_list(); }
+    );
+    parser.add("start", "PROGRAM [ARGS...]", "start a tracee program",
+        [&](vector<string> args) { 
+            trees.push_back(do_start(tracer, std::move(args))); 
+        }
+    );
+    parser.add("tree", "[TREE]", "debug output for a process tree (or all)",
+        [&](vector<string> args) { do_tree(trees, std::move(args)); }
+    );
+    parser.add("trees", "", "print a list of all the process trees",
+        [&] { do_trees(trees); }
+    );
+    parser.add("run", "PROGRAM [ARGS...]", "same as start & resume",
+        [&](vector<string> args) { 
+            trees.push_back(do_start(tracer, std::move(args))); 
+            tracer.step(); 
+        }
+    );
+    parser.add("next", "", "resume all tracees until they stop again",
+        [&] { do_next(tracer); },
+    true);
+    parser.add("quit", "", "quit " + string(program_name()),
+        [] { throw QuitCommandLoop(); }
+    );
+}
+
+static bool confirm_quit(Tracer& tracer, bool dueToEOF)
+{
+    if (!tracer.tracees_alive())
+    {
+        if (dueToEOF)
+        {
+            std::cerr << "EOF\n";
+        }
+        return true;
+    }
+    std::cerr << "There are still tracees alive. Quitting will kill them.\n\n";
+    string line;
+    if (!read_line("    Are you sure? (y/N) ", line))
+    {
+        std::cerr << "EOF\n";
+        return true;
+    }
+    if (line == "y" || line == "Y")
+    {
+        return true;
+    }
+    std::cerr << '\n';
+    return false;
+}
+
+static void command_line(CommandParser& cmdline, Tracer& tracer)
+{
+    while (true)
+    {
+        try
+        {
+            while (cmdline.do_command("(ft) ")) 
+            { 
+                tracer.check_orphans(); // see header comment
+            }
+            if (confirm_quit(tracer, true))
+            {
+                return;
+            }
+        }
+        catch (const QuitCommandLoop& e)
+        {
+            if (confirm_quit(tracer, false))
+            {
+                return;
+            }
+        }
+    }
+}
+
+static bool run(Tracer& tracer, vector<string> command)
+{
+    vector<shared_ptr<Process>> trees; // root of each process tree
     CommandParser cmdline;
-    register_commands(cmdline, tracer, tree);
+    register_commands(cmdline, tracer, trees);
     if (command.empty())
     {
         verbose("No command provided. Going into command line mode.");
-        return command_line(cmdline);
+        command_line(cmdline, tracer);
     }
     else
     {
@@ -264,9 +375,13 @@ bool run(Tracer& tracer, vector<string> command)
         try
         {
             assert(!command.empty());
-            tree = tracer.start(command[0], command);
+            trees.push_back(tracer.start(command[0], command));
             while (tracer.step()) { }
-            tree->print_tree();
+            for (size_t i = 0; i < trees.size(); ++i)
+            {
+                std::cerr << format("Process tree {}:\n", i);
+                trees[i]->print_tree();
+            }
         }
         catch (const std::exception& e)
         {

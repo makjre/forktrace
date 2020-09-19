@@ -181,11 +181,22 @@ public:
      * This function is safe to call from a separate thread. */
     void notify_orphan(pid_t pid);
 
+    /* Will ask the tracer to check if it has recently been notified of any
+     * orphans and if it has, to handle those now (instead of later). We use
+     * this to implement a bash-like feature where pressing enter will cause
+     * bash to show any jobs that were killed since the last command. Whether
+     * this ends up doing anything depends on the timings etc. since step()
+     * will do these checks itself (so not calling this isn't a big deal). */
+    void check_orphans();
+
     /* Will forcibly kill everything. Safe to call from separate thread. */
     void nuke();
 
     /* Prints a list of all the active processes to std::cerr. */
     void print_list() const;
+
+    /* Return true if any tracees are still alive (zombies aren't counted). */
+    bool tracees_alive() const;
 };
 
 #endif /* FORKTRACE_TRACER_HPP */

@@ -17,7 +17,8 @@
 /* Uses GNU readline to read a line of input from the user with the provided
  * prompt. Returns false on EOF, otherwise the line is stored in `line`. If
  * complete is true, then readline's default TAB filename completion will be 
- * enabled. Non-empty lines will be added to readline's history buffer. */
+ * enabled. Non-empty lines will be added to readline's history buffer. Will
+ * strip the line of trailing and leading whitespace. */
 bool read_line(std::string_view prompt, 
                std::string& line, 
                bool complete = false);

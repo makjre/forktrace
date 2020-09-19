@@ -28,14 +28,14 @@ BadTraceError::BadTraceError(pid_t pid, string_view msg) : _pid(pid)
 
 /* Builds an error that describes a weird wait(2) status. Will probe around
  * in the tracee for information if possible. Just throw this error. */
-BadTraceError diagnose_bad_event(Tracee& tracee, int wstatus, string msg)
+static BadTraceError diagnose_bad_event(Tracee& tracee, int status, string msg)
 {
-    msg += format(" ({})", diagnose_wait_status(wstatus));
+    msg += format(" ({})", diagnose_wait_status(status));
     if (tracee.syscall != SYSCALL_NONE)
     {
         msg += format(" (syscall={})", get_syscall_name(tracee.syscall));
     }
-    if (IS_SYSCALL_EVENT(wstatus))
+    if (IS_SYSCALL_EVENT(status))
     {
         try
         {
@@ -952,6 +952,12 @@ void Tracer::notify_orphan(pid_t pid)
     _orphans.push(pid);
 }
 
+void Tracer::check_orphans()
+{
+    std::scoped_lock<std::mutex> guard(_lock);
+    collect_orphans(); // don't want to expose unlocked version publicly
+}
+
 void Tracer::nuke() 
 {
     std::scoped_lock<std::mutex> guard(_lock);
@@ -981,4 +987,17 @@ void Tracer::print_list() const
             pid, tracee.process->state(), tracee.process->command_line());
     }
     std::cerr << "total: " << _tracees.size() << '\n';
+}
+
+bool Tracer::tracees_alive() const
+{
+    std::scoped_lock<std::mutex> guard(_lock);
+    for (auto& pair : _tracees)
+    {
+        if (pair.second.state != Tracee::DEAD)
+        {
+            return true; // TODO use counters instead?
+        }
+    }
+    return false;
 }
