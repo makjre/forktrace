@@ -26,6 +26,13 @@ BadTraceError::BadTraceError(pid_t pid, string_view msg) : _pid(pid)
     _message = format("BadTraceError (pid={}): {}", pid, msg);
 }
 
+BadTraceError::BadTraceError(pid_t pid, int wstatus, string_view msg)
+    : _pid(pid)
+{
+    _message = format("BadTraceError (pid={}, wstatus={}): {}", 
+        pid, wstatus, msg);
+}
+
 /* Okay this is really weird but this method should really be in the tracer
  * class. I don't want to do that because then I'd expose this method to
  * everyone which I don't want to do. Instead I made the Tracee class a
@@ -327,7 +334,7 @@ void Tracer::handle_fork(Tracee& tracee)
     {
         if (!IS_SYSCALL_EVENT(status)) 
         {
-            throw BadTraceError(tracee.pid,
+            throw BadTraceError(tracee.pid, status,
                 "Expected syscall-exit-stop after bad fork.");
         }
         tracee.syscall = SYSCALL_NONE;
@@ -359,7 +366,7 @@ void Tracer::handle_fork(Tracee& tracee)
     }
     if (WSTOPSIG(status) != SIGSTOP)
     {
-        throw BadTraceError(childId, "Expected SIGSTOP after fork.");
+        throw BadTraceError(childId, status, "Expected SIGSTOP after fork.");
     }
 
     // Resume parent until the syscall-exit-stop
@@ -370,7 +377,7 @@ void Tracer::handle_fork(Tracee& tracee)
     if (!IS_SYSCALL_EVENT(status)) 
     {
         // TODO what about INTR errors from fork? I guess it already succeeded.
-        throw BadTraceError(tracee.pid, 
+        throw BadTraceError(tracee.pid, status,
             "Expected syscall-exit-stop after fork.");
     }
     tracee.syscall = SYSCALL_NONE;
@@ -410,7 +417,7 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
         /* Exec has failed!!! */
         if (!IS_SYSCALL_EVENT(status)) 
         {
-            throw BadTraceError(tracee.pid,
+            throw BadTraceError(tracee.pid, status,
                 "Expected a syscall-exit-stop after failed exec.");
         }
         tracee.syscall = SYSCALL_NONE;
@@ -439,7 +446,7 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
     }
     if (!IS_SYSCALL_EVENT(status)) 
     {
-        throw BadTraceError(tracee.pid, 
+        throw BadTraceError(tracee.pid, status,
             "Expected syscall-exit-stop after exec.");
     }
     tracee.syscall = SYSCALL_NONE;
@@ -751,8 +758,7 @@ void Tracer::expect_ended(Tracee& tracee)
     }
     if (!WIFEXITED(status) && !WIFSIGNALED(status))
     {
-        debug("status={}", status);
-        throw BadTraceError(tracee.pid, 
+        throw BadTraceError(tracee.pid, status,
             "Expected tracee to have ended, but it hasn't.");
     }
 
@@ -770,7 +776,7 @@ void Tracer::handle_wait_notification(Tracee& tracee, int status)
 
     if (!WIFSTOPPED(status))
     {
-        throw BadTraceError(tracee.pid, 
+        throw BadTraceError(tracee.pid, status,
             "Tracee hasn't ended but also hasn't stopped...");
     }
     tracee.stopped = true;
@@ -800,8 +806,7 @@ void Tracer::handle_wait_notification(Tracee& tracee, int status)
     {
         // These events should only be generated when handling the respective
         // system calls. They should not be appearing now.
-        debug("status={}", status);
-        throw BadTraceError(tracee.pid, "Got an event at weird time.");
+        throw BadTraceError(tracee.pid, status, "Got an event at weird time.");
     }
     else
     {

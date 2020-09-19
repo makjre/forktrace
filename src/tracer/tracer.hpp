@@ -44,6 +44,9 @@ private:
 public:
     /* Call this when a weird event occurs. */
     BadTraceError(pid_t pid, std::string_view message);
+
+    /* Call this when we get an unexpected wait status. */
+    BadTraceError(pid_t pid, int wstatus, std::string_view message);
     
     const char* what() const noexcept { return _message.c_str(); }
     pid_t pid() const noexcept { return _pid; } // TODO noexcept needed here?
