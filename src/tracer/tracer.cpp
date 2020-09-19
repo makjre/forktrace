@@ -26,20 +26,38 @@ BadTraceError::BadTraceError(pid_t pid, string_view msg) : _pid(pid)
     _message = format("BadTraceError (pid={}): {}", pid, msg);
 }
 
-BadTraceError::BadTraceError(pid_t pid, int wstatus, string_view msg)
-    : _pid(pid)
+/* Builds an error that describes a weird wait(2) status. Will probe around
+ * in the tracee for information if possible. Just throw this error. */
+BadTraceError diagnose_bad_event(Tracee& tracee, int wstatus, string msg)
 {
-    _message = format("BadTraceError (pid={}, wstatus={}): {}", 
-        pid, wstatus, msg);
-}
-
-/* Okay this is really weird but this method should really be in the tracer
- * class. I don't want to do that because then I'd expose this method to
- * everyone which I don't want to do. Instead I made the Tracee class a
- * friend of the Tracer and I'll put this static member function inside it. */
-void Tracee::remove_tracee(Tracer& tracer, pid_t pid)
-{
-    tracer._tracees.erase(pid);
+    msg += format(" ({})", diagnose_wait_status(wstatus));
+    if (tracee.syscall != SYSCALL_NONE)
+    {
+        msg += format(" (syscall={})", get_syscall_name(tracee.syscall));
+    }
+    if (IS_SYSCALL_EVENT(wstatus))
+    {
+        try
+        {
+            int syscall;
+            size_t args[SYS_ARG_MAX]; // ignore
+            if (which_syscall(tracee.pid, syscall, args))
+            {
+                // Be careful with interpreting this. If it's a syscall-exit-
+                // stop (not an entry), then this could be anything. ?TODO?
+                msg += format(" (reg={})", get_syscall_name(syscall));
+            }
+            else
+            {
+                msg += " (got ESRCH when probing further)";
+            }
+        }
+        catch (const std::exception& e) 
+        { 
+            msg += format(" (got error when probing further: {})", e.what());
+        }
+    }
+    return BadTraceError(tracee.pid, msg);
 }
 
 /* A sub-class of BlockingCall specialised for wait calls (wait4 or waitid).
@@ -221,14 +239,19 @@ template <class Result, bool ZeroTheResult, int ResultArgIndex>
 void WaitCall<Result, ZeroTheResult, ResultArgIndex>
 ::on_success(Tracer& tracer, Tracee& tracee, pid_t chosen)
 {
-    shared_ptr<Process> child = tracer.find(chosen);
-    if (!child)
+    auto it = tracer._tracees.find(chosen);
+    if (it == tracer._tracees.end())
     {
         throw BadTraceError(tracee.pid, 
-            "Tracee reaped a child that I don't know about.");
+            format("Tracee reaped an unknown child ({}).", chosen));
     }
-    tracee.process->notify_reaped(std::move(child));
-    Tracee::remove_tracee(tracer, chosen);
+    if (it->second.state != Tracee::DEAD)
+    {
+        throw BadTraceError(tracee.pid,
+            format("Tracee reaped a child ({}) that wasn't dead.", chosen));
+    }
+    tracee.process->notify_reaped(it->second.process);
+    tracer._tracees.erase(it);
 }
 
 template <class Result, bool ZeroTheResult, int ResultArgIndex>
@@ -318,7 +341,6 @@ void Tracer::handle_failed_fork(Tracee& tracee)
     log("{} failed fork: {}", tracee.pid, strerror_s(err));
     log("Nuking everything with SIGKILL and committing suicide :-)");
     _exit(1);
-    /* NOTREACHED */
 }
 
 /* Also called for fork-like clones. Doesn't work with vfork yet :-( */
@@ -334,7 +356,7 @@ void Tracer::handle_fork(Tracee& tracee)
     {
         if (!IS_SYSCALL_EVENT(status)) 
         {
-            throw BadTraceError(tracee.pid, status,
+            throw diagnose_bad_event(tracee, status,
                 "Expected syscall-exit-stop after bad fork.");
         }
         tracee.syscall = SYSCALL_NONE;
@@ -355,8 +377,7 @@ void Tracer::handle_fork(Tracee& tracee)
     }
 
     auto process = std::make_shared<Process>(childId, tracee.process);
-    Tracee& child = add_tracee(childId, process);
-    child.stopped = false; // The child doesn't start out stopped
+    Tracee& child = add_tracee(childId, process); // will be in stopped state
     tracee.process->notify_forked(process);
 
     // Our ptrace config causes SIGSTOP to be raised in the child after fork
@@ -366,7 +387,8 @@ void Tracer::handle_fork(Tracee& tracee)
     }
     if (WSTOPSIG(status) != SIGSTOP)
     {
-        throw BadTraceError(childId, status, "Expected SIGSTOP after fork.");
+        throw diagnose_bad_event(child, status, 
+            "Expected SIGSTOP after fork.");
     }
 
     // Resume parent until the syscall-exit-stop
@@ -377,7 +399,7 @@ void Tracer::handle_fork(Tracee& tracee)
     if (!IS_SYSCALL_EVENT(status)) 
     {
         // TODO what about INTR errors from fork? I guess it already succeeded.
-        throw BadTraceError(tracee.pid, status,
+        throw diagnose_bad_event(tracee, status,
             "Expected syscall-exit-stop after fork.");
     }
     tracee.syscall = SYSCALL_NONE;
@@ -417,7 +439,7 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
         /* Exec has failed!!! */
         if (!IS_SYSCALL_EVENT(status)) 
         {
-            throw BadTraceError(tracee.pid, status,
+            throw diagnose_bad_event(tracee, status,
                 "Expected a syscall-exit-stop after failed exec.");
         }
         tracee.syscall = SYSCALL_NONE;
@@ -446,14 +468,16 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
     }
     if (!IS_SYSCALL_EVENT(status)) 
     {
-        throw BadTraceError(tracee.pid, status,
+        throw diagnose_bad_event(tracee, status,
             "Expected syscall-exit-stop after exec.");
     }
     tracee.syscall = SYSCALL_NONE;
     tracee.process->notify_exec(std::move(file), std::move(args), 0);
-    if (tracee.pid == _leader)
+
+    auto it = _leaders.find(tracee.pid);
+    if (it != _leaders.end())
     {
-        _execed = true;
+        it->second.execed = true;
     }
 }
 
@@ -486,51 +510,50 @@ void Tracer::handle_new_location(Tracee& tracee,
         return;
     }
     tracee.process->update_location(std::move(location));
-    tracee.syscall = SYSCALL_NONE;
-    // Since this syscall is not real, there won't be a syscall-exit-stop, so 
-    // don't worry about handling that, just keep chugging along.
-    resume(tracee);
+    resume(tracee); // continue until syscall-exit-stop
 }
 
-/* Check via the callback if there are currently any orphans available for 
- * us. If we find any, then we'll remove the tracee from our list (this this
- * can invalidate any current iterators into the _tracees map. */
 void Tracer::collect_orphans() 
 {
-    pid_t pid;
-
-next_orphan:
-    while (_getOrphanCallback(pid)) 
+    while (!_orphans.empty())
     {
+        pid_t pid = _orphans.front();
+        _orphans.pop();
+
         auto it = std::find(_recycledPIDs.begin(), _recycledPIDs.end(), pid);
         if (it != _recycledPIDs.end())
         {
             _recycledPIDs.erase(it); // we already removed it
-            goto next_orphan;
+            continue;
         }
 
         auto pair = _tracees.find(pid);
-        assert(pair != _tracees.end()); // TODO assert on external factors
+        if (pair == _tracees.end())
+        {
+            warning("Unknown PID {} was orphaned", pid);
+            continue;
+        }
+        if (pair->second.state != Tracee::DEAD)
+        {
+            throw BadTraceError(pid, "An alive tracee was orphaned.");
+        }
+
+        log("{} orphaned", pid);
         pair->second.process->notify_orphaned();
         _tracees.erase(pair);
-        log("{} orphaned", pid);
     }
 }
 
 shared_ptr<Process> Tracer::start(string_view program, vector<string> argv) 
 {
-    if (tracees_alive())
-    {
-        return nullptr;
-    }
+    std::scoped_lock<std::mutex> guard(_lock);
 
     pid_t pid = start_tracee(program, argv); // may throw
-    _leader = pid;
-    _execed = false;
     auto process = std::make_shared<Process>(pid, program, argv);
+    Leader& leader = _leaders[pid] = Leader();
     add_tracee(pid, process);
 
-    while (!_execed)
+    while (!leader.execed)
     {
         // Search the map each time since it is possible that the leader has 
         // ended and been removed and old references invalidated.
@@ -555,37 +578,44 @@ shared_ptr<Process> Tracer::start(string_view program, vector<string> argv)
     return process;
 }
 
-shared_ptr<Process> Tracer::find(pid_t pid)
-{
-    auto it = _tracees.find(pid);
-    if (it == _tracees.end())
-    {
-        return nullptr;
-    }
-    return it->second.process;
-}
-
-bool Tracer::all_tracees_stopped() const
+bool Tracer::all_tracees_dead() const
 {
     for (auto& pair : _tracees)
     {
-        if (!pair.second.stopped)
+        if (pair.second.state != Tracee::DEAD)
         {
-            return false;
+            return false; // TODO use counters instead?
         }
     }
     return true;
+}
+
+bool Tracer::are_tracees_running() const
+{
+    for (auto& pair : _tracees)
+    {
+        if (pair.second.state == Tracee::RUNNING)
+        {
+            return true; // TODO use counters instead?
+        }
+    }
+    return false;
 }
 
 bool Tracer::wait_for_stop(Tracee& tracee, int& status)
 {
     if (waitpid(tracee.pid, &status, 0) == -1) 
     {
+        if (errno == ECHILD)
+        {
+            throw BadTraceError(tracee.pid, 
+                "Waited for tracee to stop but it doesn't exist.");
+        }
         throw system_error(errno, generic_category(), "waitpid");
     }
     if (WIFSTOPPED(status)) 
     {
-        tracee.stopped = true;
+        tracee.state = Tracee::STOPPED;
         return true;
     }
     handle_wait_notification(tracee, status);
@@ -594,7 +624,7 @@ bool Tracer::wait_for_stop(Tracee& tracee, int& status)
 
 bool Tracer::resume(Tracee& tracee)
 {
-    if (!tracee.stopped)
+    if (tracee.state != Tracee::STOPPED)
     {
         debug("{} not stopped, so not resuming it.", tracee.pid);
         return true; // TODO why would this happen? Should it happen?
@@ -604,8 +634,12 @@ bool Tracer::resume(Tracee& tracee)
     {
         debug("resume_tracee({}) failed", tracee.pid);
     }
+    else
+    {
+        debug("resumed tracee {}", tracee.pid);
+    }
     tracee.signal = 0;
-    tracee.stopped = false;
+    tracee.state = Tracee::RUNNING;
     return ok;
 }
 
@@ -704,8 +738,8 @@ void Tracer::handle_syscall_exit(Tracee& tracee)
     {
         verbose("{} exited syscall {}", 
             tracee.pid, get_syscall_name(tracee.syscall));
-        resume(tracee);
     }
+    resume(tracee);
     tracee.syscall = SYSCALL_NONE;
 }
 
@@ -719,6 +753,13 @@ void Tracer::handle_signal_stop(Tracee& tracee, int signal)
         // signals when the process resumes. Will think more about this.
         throw BadTraceError(tracee.pid, "Tracee delivered a signal when there"
             " was already a pending signal.");
+    }
+
+    if (signal == SIGTTIN)
+    {
+        // TODO
+        throw BadTraceError(tracee.pid, "Looks like this process tried to "
+            "read frmo the terminal. Sorry, I don't support that (yet).");
     }
 
     siginfo_t info;
@@ -758,29 +799,17 @@ void Tracer::expect_ended(Tracee& tracee)
     }
     if (!WIFEXITED(status) && !WIFSIGNALED(status))
     {
-        throw BadTraceError(tracee.pid, status,
+        throw diagnose_bad_event(tracee, status,
             "Expected tracee to have ended, but it hasn't.");
     }
 
+    // this will handle the event for us and set tracee's state to DEAD
     handle_wait_notification(tracee, status);
 }
 
-void Tracer::handle_wait_notification(Tracee& tracee, int status)
+void Tracer::handle_stopped(Tracee& tracee, int status)
 {
-    if (WIFEXITED(status) || WIFSIGNALED(status))
-    {
-        tracee.process->notify_ended(status);
-        _tracees.erase(tracee.pid);
-        return;
-    }
-
-    if (!WIFSTOPPED(status))
-    {
-        throw BadTraceError(tracee.pid, status,
-            "Tracee hasn't ended but also hasn't stopped...");
-    }
-    tracee.stopped = true;
-
+    assert(WIFSTOPPED(status));
     if (IS_SYSCALL_EVENT(status))
     {
         if (tracee.syscall == SYSCALL_NONE)
@@ -796,7 +825,7 @@ void Tracer::handle_wait_notification(Tracee& tracee, int status)
         }
         else
         {
-            handle_syscall_exit(tracee);
+            handle_syscall_exit(tracee); // resets to SYSCALL_NONE for us
         }
     }
     else if (IS_FORK_EVENT(status) 
@@ -806,13 +835,49 @@ void Tracer::handle_wait_notification(Tracee& tracee, int status)
     {
         // These events should only be generated when handling the respective
         // system calls. They should not be appearing now.
-        throw BadTraceError(tracee.pid, status, "Got an event at weird time.");
+        throw diagnose_bad_event(tracee, status, "Got event at weird time.");
     }
     else
     {
         handle_signal_stop(tracee, WSTOPSIG(status));
     }
+}
 
+void Tracer::handle_wait_notification(Tracee& tracee, int status)
+{
+    if (tracee.state == Tracee::DEAD)
+    {
+        throw diagnose_bad_event(tracee, status, "Got event for dead tracee.");
+    }
+    if (WIFEXITED(status) || WIFSIGNALED(status))
+    {
+        tracee.process->notify_ended(status);
+        if (_leaders.find(tracee.pid) != _leaders.end())
+        {
+            log("leader {} ended", tracee.pid);
+            // Also, since we're the parent of this proces, this ptrace
+            // notification doubles up as us reaping it, so we can remove it.
+            _tracees.erase(tracee.pid);
+            // We don't want to reset _leader since we want to keep the PID
+            // around since it doubles up as the PGID (for easy killing), so
+            // we'll just _leader set.
+        }
+        else
+        {
+            // We don't want to erase the tracee from our list until we've been
+            // told that it was orphaned or reaped. So remember this for later.
+            tracee.state = Tracee::DEAD;
+        }
+        return;
+    }
+
+    if (!WIFSTOPPED(status))
+    {
+        throw diagnose_bad_event(tracee, status,
+            "Tracee hasn't ended but also hasn't stopped...");
+    }
+    tracee.state = Tracee::STOPPED;
+    handle_stopped(tracee, status);
 }
 
 Tracee& Tracer::add_tracee(pid_t pid, shared_ptr<Process> process)
@@ -832,48 +897,75 @@ Tracee& Tracer::add_tracee(pid_t pid, shared_ptr<Process> process)
 
 bool Tracer::step() 
 {
-    for (auto& [pid, tracee] : _tracees) 
     {
-        resume_tracee(pid, tracee.signal); // Ignore ESRCH failure TODO
-        tracee.signal = 0;
-    }
-    collect_orphans();
-
-    int status;
-    pid_t pid;
-    while ((pid = wait(&status)) != -1) 
-    {
-        auto it = _tracees.find(pid);
-        if (it == _tracees.end())
+        // We only want the mutex locked up until we wait() since the wait is
+        // a blocking call and we don't want to keep it locked unnecessarily.
+        std::scoped_lock<std::mutex> guard(_lock);
+        if (_tracees.empty())
         {
-            warning("Got wait status {} for unknown PID {}.", status, pid);
-            continue;
+            return false; // no tracees left
         }
-
-        handle_wait_notification(it->second, status);
-        collect_orphans(); // this could invalidate the iterator!!!
-
-        if (all_tracees_stopped())
+        for (auto& [pid, tracee] : _tracees) 
         {
-            return true;
+            resume(tracee);
         }
-    }
-    while (!_tracees.empty()) 
-    {
         collect_orphans();
     }
-    return false;
+
+    // We only want to wait if we know there's something to wait for. If we're
+    // not careful with that, then we could end up blocking forever.
+    if (are_tracees_running())
+    {
+        int status;
+        pid_t pid;
+        while ((pid = wait(&status)) != -1) 
+        {
+            std::scoped_lock<std::mutex> guard(_lock);
+
+            auto it = _tracees.find(pid);
+            if (it == _tracees.end())
+            {
+                warning("Got wait status \"{}\" for unknown PID {}.", 
+                    diagnose_wait_status(status), pid);
+                continue;
+            }
+
+            handle_wait_notification(it->second, status);
+            collect_orphans();
+
+            if (all_tracees_dead())
+            {
+                break;
+            }
+            if (!are_tracees_running())
+            {
+                return true;
+            }
+        }
+    }
+    return !_tracees.empty();
+}
+
+void Tracer::notify_orphan(pid_t pid)
+{
+    std::scoped_lock<std::mutex> guard(_lock);
+    _orphans.push(pid);
 }
 
 void Tracer::nuke() 
 {
-    if (_leader == -1 || _tracees.empty())
+    std::scoped_lock<std::mutex> guard(_lock);
+    if (_tracees.empty())
     {
         return;
     }
-    if (killpg(_leader, SIGKILL) == -1)
+    for (auto& pair : _leaders)
     {
-        throw system_error(errno, generic_category(), "killpg");
+        // TODO need to clear _leaders list when process group is empty.
+        // Not just since killpg would fail but also because PID recycling
+        // could mean we're accidentally killing something else... To do this
+        // I'd need to keep track of the PGID of each tracee.
+        killpg(pair.first, SIGKILL);
     }
     //while (step()) { }
     //assert(_tracees.empty());
@@ -882,6 +974,7 @@ void Tracer::nuke()
 
 void Tracer::print_list() const 
 {
+    std::scoped_lock<std::mutex> guard(_lock);
     for (auto& [pid, tracee] : _tracees) 
     {
         std::cerr << format("{} {} {}\n", 

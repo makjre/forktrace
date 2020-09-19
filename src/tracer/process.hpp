@@ -37,10 +37,10 @@ class Process
 private:
     enum class State 
     {
-        ALIVE,
-        ZOMBIE,
-        REAPED,
-        ORPHANED,
+        ALIVE,    // process is alive
+        ZOMBIE,   // process is dead but hasn't been reaped yet
+        REAPED,   // process is dead and was reaped by a parent
+        ORPHANED, // process is dead and the reaper process had to reap it
     };
 
     /* History */

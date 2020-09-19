@@ -69,4 +69,9 @@ int get_syscall_arg_count(int syscall);
 /* Get the name corresponding to a signal number (or "?????" if none) */
 std::string_view get_signal_name(int signal);
 
+/* Returns a string describing the provided wait(2) child status. This will
+ * include events like ptrace(2) events (see ptrace.hpp). If the event was
+ * unknown, a string describing the raw number is returned. */
+std::string diagnose_wait_status(int status);
+
 #endif /* FORKTRACE_SYSTEM_HPP */

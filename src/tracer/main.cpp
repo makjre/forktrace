@@ -737,49 +737,9 @@ bool handle_inject_action(vector<string> args)
  *****************************************************************************/
 
 /* This feature is useful for debugging */
-void diagnose_status(int status)
+void diagnose_status(int wstatus)
 {
-    if (WIFEXITED(status))
-    {
-        std::cerr << format("exited with {}\n", WEXITSTATUS(status));
-    }
-    else if (WIFSIGNALED(status))
-    {
-        std::cerr << format("killed by {} ({})\n", 
-            get_signal_name(WTERMSIG(status)), WTERMSIG(status));
-    }
-    else if (WIFSTOPPED(status))
-    {
-        if (IS_FORK_EVENT(status))
-        {
-            std::cerr << "fork event\n";
-        }
-        else if (IS_EXEC_EVENT(status))
-        {
-            std::cerr << "exec event\n";
-        }
-        else if (IS_CLONE_EVENT(status))
-        {
-            std::cerr << "clone event\n";
-        }
-        else if (IS_EXIT_EVENT(status))
-        {
-            std::cerr << "exit event\n";
-        }
-        else if (IS_SYSCALL_EVENT(status))
-        {
-            std::cerr << "syscall event\n";
-        }
-        else
-        {
-            std::cerr << format("stopped by {} ({})\n", 
-                get_signal_name(WSTOPSIG(status)), WSTOPSIG(status));
-        }
-    }
-    else
-    {
-        std::cerr << "no clue what that is\n";
-    }
+    std::cerr << diagnose_wait_status(wstatus) << '\n';
 }
 
 /* This feature is useful for debugging */

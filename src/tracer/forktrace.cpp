@@ -8,11 +8,9 @@
 #include <cstdlib>
 #include <map>
 #include <iostream>
-#include <queue>
-#include <mutex>
-#include <atomic>
 #include <thread>
 #include <optional>
+#include <atomic>
 
 #include "forktrace.hpp"
 #include "system.hpp"
@@ -35,15 +33,7 @@ using fmt::format;
  * (I'd rather not modify CommandParser so that handlers returned a value.) */
 struct QuitCommandLoop { };
 
-/* To cleanly find out when a process is orphaned, we exec a reaper process
- * (and run the tracer as the child instead) that sits above us and sends the
- * pids of orphans that it has collected through a pipe. We'll then create a
- * thread to read those pids from the pipe onto this queue. We'll tell the
- * tracer how it can access these orphans via a callback function. */
-static std::queue<pid_t> gOrphans;
-static std::mutex gOrphansLock;
-
-/* TODO Explain. TODO MEMORY FENCE?? TODO volatile? */
+/* TODO Explain. TODO MEMORY FENCE?? TODO volatile? TODO yeet??? */
 static volatile std::atomic<bool> gDone = false;
 
 static void signal_handler(int sig, siginfo_t* info, void* ucontext) 
@@ -125,25 +115,11 @@ static void signal_thread(Tracer& tracer, sigset_t set)
     assert(!"sigwait shouldn't fail!");
 }
 
-/* Check if there's an orphan's pid available on the queue and return it by
- * reference if there is (and return true). Otherwise return false. Intended
- * to be used as a callback by Tracers to learn about orphans. */
-static bool pop_orphan(pid_t& pid) 
-{
-    std::scoped_lock<std::mutex> guard(gOrphansLock);
-    if (gOrphans.empty()) {
-        return false;
-    }
-    pid = gOrphans.front();
-    gOrphans.pop();
-    return true;
-}
-
 /* It's the caller's responsibility to close the file. This thread reads PIDs
  * of orphaned processes from the reaper (our parent) and puts them on the
  * list of orphans. You can cancel this by setting gDone == false and sending
  * a signal (without SA_RESTART) to cancel any current read calls. */
-static void reaper_thread(FILE* fromReaper) 
+static void reaper_thread(Tracer& tracer, FILE* fromReaper) 
 {
     for (;;) 
     {
@@ -156,8 +132,7 @@ static void reaper_thread(FILE* fromReaper)
         {
             break;
         }
-        std::scoped_lock<std::mutex> guard(gOrphansLock);
-        gOrphans.push(pid);
+        tracer.notify_orphan(pid);
     }
 }
 
@@ -273,6 +248,35 @@ static void join_reaper(std::thread& reaper, FILE* reaperPipe)
     reaper.join();
 }
 
+bool run(Tracer& tracer, vector<string> command)
+{
+    shared_ptr<Process> tree; // root of the process tree
+    CommandParser cmdline;
+    register_commands(cmdline, tracer, tree);
+    if (command.empty())
+    {
+        verbose("No command provided. Going into command line mode.");
+        return command_line(cmdline);
+    }
+    else
+    {
+        log("Starting the command: {}", join(command));
+        try
+        {
+            assert(!command.empty());
+            tree = tracer.start(command[0], command);
+            while (tracer.step()) { }
+            tree->print_tree();
+        }
+        catch (const std::exception& e)
+        {
+            error("Got error during trace: {}", e.what());
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Basically the entry point to the program (called from main) after we've done
  * all of the parsing of the command-line options. If !command.empty(), then we
  * run the specified command in forktrace from start to finish. Otherwise, we
@@ -302,48 +306,25 @@ bool forktrace(vector<string> command, ForktraceOpts settings)
             error("Failed to start reaper.");
             return false;
         }
-        reaper.emplace(reaper_thread, reaperPipe); // starts the thread
     }
     log("Hello, I'm {}", getpid());
 
-    /* Create the tracer and tell it how it can find out about orphans from
-     * us by giving it a callback function. */
-    Tracer tracer(pop_orphan);
-
-    /* Start our waiting thread for SIGINT. */
+    /* Start the reaper and sigwait threads. */
+    Tracer tracer;
+    if (settings.reaper)
+    {
+        reaper.emplace(reaper_thread, std::ref(tracer), reaperPipe);
+    }
     std::thread sigwaiter(signal_thread, std::ref(tracer), set);
 
-    shared_ptr<Process> tree; // root of the process tree
-    CommandParser cmdline;
-    register_commands(cmdline, tracer, tree);
-
-    bool ok = true;
-    if (command.empty())
-    {
-        verbose("No command provided. Going into command line mode.");
-        ok = command_line(cmdline);
-    }
-    else
-    {
-        log("Starting the command: {}", join(command));
-        try
-        {
-            assert(!command.empty());
-            tree = tracer.start(command[0], command);
-            while (tracer.step()) { }
-        }
-        catch (const std::exception& e)
-        {
-            error("Got error during trace: {}", e.what());
-            ok = false;
-        }
-    }
+    bool ok = run(tracer, std::move(command));
 
     join_sigwaiter(sigwaiter);
-    if (reaper.has_value())
+    if (settings.reaper)
     {
         join_reaper(reaper.value(), reaperPipe);
         fclose(reaperPipe);
     }
+
     return ok;
 }

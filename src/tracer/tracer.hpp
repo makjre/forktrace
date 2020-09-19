@@ -10,10 +10,9 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
-#include <atomic>
+#include <mutex>
+#include <queue>
 #include <functional>
-#include <cstdio>
-#include <signal.h>
 
 #include "system.hpp"
 
@@ -44,9 +43,6 @@ private:
 public:
     /* Call this when a weird event occurs. */
     BadTraceError(pid_t pid, std::string_view message);
-
-    /* Call this when we get an unexpected wait status. */
-    BadTraceError(pid_t pid, int wstatus, std::string_view message);
     
     const char* what() const noexcept { return _message.c_str(); }
     pid_t pid() const noexcept { return _pid; } // TODO noexcept needed here?
@@ -75,46 +71,65 @@ public:
 /* Used for book-keeping by the Tracer class. */
 struct Tracee
 {
+    enum State
+    {
+        RUNNING,
+        STOPPED,
+        DEAD,
+    };
+
     pid_t pid;
-    bool stopped;
+    State state;
     int syscall;    // Current syscall, SYSCALL_NONE if not in one
     int signal;     // Pending signal to be delivered when next resumed
     std::shared_ptr<Process> process;
     std::unique_ptr<BlockingCall> blockingCall;
 
+    /* Create a tracee started in the stopped state */
     Tracee(pid_t pid, std::shared_ptr<Process> process)
-        : pid(pid), stopped(true), syscall(SYSCALL_NONE),
+        : pid(pid), state(State::STOPPED), syscall(SYSCALL_NONE),
         signal(0), process(std::move(process)) { }
 
     /* Need a default constructor for use with unordered_map<>::operator[] */
-    Tracee() : pid(-1), stopped(false), syscall(SYSCALL_NONE), signal(0) { }
-
-    /* See tracer.cpp */
-    static void remove_tracee(Tracer& tracer, pid_t pid);
+    Tracee() : pid(-1), state(State::RUNNING), 
+        syscall(SYSCALL_NONE), signal(0) { }
 };
 
+/* All the public member functions are "thread-safe". */
 class Tracer 
 {
 private:
-    friend struct Tracee; // needed for remove_tracee in tracer.cpp
+    /* This class is defined in tracer.cpp and needs access to us to help
+     * handle a successful wait call. I could make public member functions
+     * for that but I don't want to expose those functions to everyone. */
+    template<class, bool, int> friend class WaitCall;
+
+    /* We use a single lock for everything to keep it all simple. Currently,
+     * only the public functions lock it - private functions are all unlocked
+     * and rely on the public functions to do the locking for them. This also
+     * means that you'll need to think twice before calling a public function
+     * from a private function (since you could get a deadlock). */
+    mutable std::mutex _lock;
 
     /* Keep track of the processes that are currently active. By 'active', I
      * mean the process is either currently running or is a zombie (i.e., the
      * pid is not available for recycling yet). */
     std::unordered_map<pid_t, Tracee> _tracees;
 
-    /* Keep track of the PID of our direct child (which is also the PGID of the
-     * tracee's group). -1 indicates we have no process group yet. */
-    pid_t _leader;
+    /* A queue of all the orphans that we've been notified about. We don't
+     * handle them straight away since notify_orphan may be called from a
+     * separate thread and we want to be able to print error messages and
+     * throw exceptions in the main thread that calls step(). */
+    std::queue<pid_t> _orphans;
+    
+    struct Leader
+    {
+        bool execed; // has the initial exec succeeded yet?
+        Leader() : execed(false) { }
+    };
 
-    /* Keep track of whether the leader has successfully execed yet or not. */
-    bool _execed;
-
-    /* We use this callback when we want to check if there are any newly
-     * orphaned tracees. This callback should return false if there are no
-     * orphans currently available. If it returns true, then it should store
-     * the pid of the orphan by reference. */
-    std::function<bool(pid_t&)> _getOrphanCallback;
+    /* Keep track of the PIDs of our direct children. */
+    std::unordered_map<pid_t, Leader> _leaders;
     
     /* Stores PIDs that have been recycled by the system. This can occur when
      * the reaper process reaps a tracee, but then the system recycles its PID
@@ -125,8 +140,9 @@ private:
     std::vector<pid_t> _recycledPIDs;
 
     /* Private functions, see source file */
-    bool all_tracees_stopped() const;
     void collect_orphans();
+    bool are_tracees_running() const;
+    bool all_tracees_dead() const;
     bool resume(Tracee&);
     bool wait_for_stop(Tracee&, int&);
     void handle_wait_notification(pid_t, int);
@@ -138,13 +154,13 @@ private:
     void handle_exec(Tracee&, const char*, const char**);
     void handle_new_location(Tracee&, unsigned, const char*, const char*);
     void handle_signal_stop(Tracee&, int);
+    void handle_stopped(Tracee&, int);
     Tracee& add_tracee(pid_t, std::shared_ptr<Process>);
     void expect_ended(Tracee&);
     void initiate_wait(Tracee&, std::unique_ptr<BlockingCall>);
 
 public:
-    Tracer(std::function<bool(pid_t&)> func) 
-        : _leader(-1), _execed(false), _getOrphanCallback(func) { }
+    Tracer() { }
 
     Tracer(const Tracer&) = delete;
     Tracer(Tracer&&) = delete;
@@ -152,26 +168,24 @@ public:
 
     /* Start a tracee from command line arguments. The path will be searched
      * for the program. This tracee will become our child and the new leader 
-     * process. This will fail and return null if tracees are still alive from
-     * a previous session. The args list includes argv[0]. Throws system_error
+     * process. The args list includes argv[0]. Throws either a system_error
      * or runtime_error on failure. */
     std::shared_ptr<Process> start(std::string_view path, 
                                    std::vector<std::string> argv);
-
-    /* Finds a process with the specified PID or returns null if none. */
-    std::shared_ptr<Process> find(pid_t pid);
 
     /* Continue all tracees until they all stop. Returns true if there are any
      * tracees remaining and false if all are dead. */
     bool step();
 
-    /* Will forcibly kill everything. This is the only thread-safe function. */
+    /* Notify the tracer that an orphan has been reaped by the reaper process.
+     * This function is safe to call from a separate thread. */
+    void notify_orphan(pid_t pid);
+
+    /* Will forcibly kill everything. Safe to call from separate thread. */
     void nuke();
 
     /* Prints a list of all the active processes to std::cerr. */
     void print_list() const;
-
-    bool tracees_alive() const { return !_tracees.empty(); }
 };
 
 #endif /* FORKTRACE_TRACER_HPP */
