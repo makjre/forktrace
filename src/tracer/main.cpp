@@ -611,7 +611,7 @@ vector<string> ArgParser::parse(const char* argv[], ProgramAction& action)
  *****************************************************************************/
 
 /* Print the description of the inject option. */
-void inject_option_usage()
+static void inject_option_usage()
 {
     string programName(program_name());
     std::cerr << "usage: " << programName
@@ -660,7 +660,7 @@ void inject_option_usage()
 /* Searches the arguments of the provided compiler argv list for files that
  * contain C/C++ file extensions (which we will inject into) and return a list
  * of those items. Will skip argv[0] when searching (i.e., the compiler). */
-vector<string> find_inject_files(const vector<string>& argv)
+static vector<string> find_inject_files(const vector<string>& argv)
 {
     vector<string_view> exts = {
         ".c", ".h", ".cpp", ".hpp", ".cc", ".hh", ".cxx", ".hxx"
@@ -682,7 +682,7 @@ vector<string> find_inject_files(const vector<string>& argv)
 /* Called when forktrace was called with the inject option. args must contain
  * all of the command-line arguments after the -i flag. On succes, the inject 
  * action is done. On failure, false is returned. */
-bool handle_inject_action(vector<string> args)
+static bool handle_inject_action(vector<string> args)
 {
     // Split the remaining arguments using the separator into two vectors
     // usage: forktrace -i [FILES...] -- compiler {ARGS...}
@@ -737,20 +737,20 @@ bool handle_inject_action(vector<string> args)
  *****************************************************************************/
 
 /* This feature is useful for debugging */
-void diagnose_status(int wstatus)
+static void diagnose_status(int wstatus)
 {
     std::cerr << diagnose_wait_status(wstatus) << '\n';
 }
 
 /* This feature is useful for debugging */
-void print_syscall(int syscall)
+static void print_syscall(int syscall)
 {
     std::cerr << format("{} ({} args)\n", get_syscall_name(syscall), 
         get_syscall_arg_count(syscall));
 }
 
 /* Registers all of our command line options with the argparser. */
-void register_options(ArgParser& parser, ForktraceOpts& settings)
+static void register_options(ArgParser& parser, ForktraceOpts& settings)
 {
     parser.add("no-colour", 'c', "", "disables colours", 
         []{ set_colour_enabled(false); }
@@ -797,7 +797,7 @@ void register_options(ArgParser& parser, ForktraceOpts& settings)
     );
 }
 
-bool do_all_the_things(int argc, const char** argv)
+static bool do_all_the_things(int argc, const char** argv)
 {
     if (!init_log(argv[0])) // makes sure argv[0] isn't null :-)
     {

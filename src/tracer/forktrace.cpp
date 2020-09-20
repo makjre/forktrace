@@ -77,7 +77,7 @@ static void register_signals()
 }
 
 /******************************************************************************
- * REAPER AND SIGWATER THREADS
+ * REAPER AND SIGWAITER THREADS
  *****************************************************************************/
 
 /* This is where we can assign actions to SIGINT (Ctrl+C). For this to work,
@@ -367,7 +367,7 @@ static bool update_diagram_location(const Diagram& diagram,
     return false;
 }
 
-void view(const Diagram& diagram)
+static void view(const Diagram& diagram)
 {
     size_t line = 0, lane = 0, x, y;
     int eventIndex;
@@ -409,9 +409,9 @@ void view(const Diagram& diagram)
     view.run();
 }
 
-void draw_tree(const Process& tree, 
-               const ForktraceOpts& opts,
-               function<void(const Diagram&)> drawer)
+static void draw_tree(const Process& tree, 
+                      const ForktraceOpts& opts,
+                      function<void(const Diagram&)> drawer)
 {
     int flags = 0;
     if (opts.showNonFatalSignals)
@@ -442,10 +442,10 @@ void draw_tree(const Process& tree,
     }
 }
 
-void do_draw(vector<shared_ptr<Process>>& trees, 
-             const ForktraceOpts& opts,
-             vector<string> args,
-             function<void(const Diagram&)> drawer)
+static void do_draw(vector<shared_ptr<Process>>& trees, 
+                    const ForktraceOpts& opts,
+                    vector<string> args,
+                    function<void(const Diagram&)> drawer)
 {
     if (args.empty())
     {
@@ -474,7 +474,7 @@ void do_draw(vector<shared_ptr<Process>>& trees,
     }
 }
 
-void do_go(Tracer& tracer, const ForktraceOpts& opts)
+static void do_go(Tracer& tracer, const ForktraceOpts& opts)
 {
     while (tracer.step())
     {

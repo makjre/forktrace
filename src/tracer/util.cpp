@@ -113,7 +113,9 @@ string join(const vector<string>& items, char sep)
 }
 
 template<typename StrType>
-vector<StrType> split_internal(string_view str, char delim, bool ignoreEmpty)
+static vector<StrType> split_internal(string_view str, 
+                                      char delim, 
+                                      bool ignoreEmpty)
 {
     vector<StrType> tokens;
     size_t start = 0; // start of current token

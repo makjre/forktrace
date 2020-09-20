@@ -46,8 +46,8 @@ struct Paragraph
  * The returned Line structs describe the indices of the words that each line
  * consists of. `width` is the maximum length of each line. If a word is too
  * long for a single line, then we'll put that word on its own line. */
-vector<Line> assign_lines_greedily(const vector<string_view>& words, 
-                                   size_t width)
+static vector<Line> assign_lines_greedily(const vector<string_view>& words, 
+                                          size_t width)
 {
     if (words.empty())
     {
@@ -82,7 +82,8 @@ vector<Line> assign_lines_greedily(const vector<string_view>& words,
 /* Figures out where we should place line breaks in the provided paragraph of
  * words. The returned Line structs describe the indices of the words that each
  * line consists of. `width` is the maximum line length */
-vector<Line> assign_lines(const vector<string_view>& words, size_t width)
+static vector<Line> assign_lines(const vector<string_view>& words, 
+                                 size_t width)
 {
     vector<Line> lines = assign_lines_greedily(words, width);
     // TODO maybe can add some more advanced processing here if I care enough
@@ -91,10 +92,10 @@ vector<Line> assign_lines(const vector<string_view>& words, size_t width)
 
 /* Appends a justified version of the specified line of the paragraph to the
  * output string. The line will be justified to the specified width. */
-void render_line_of_paragraph(string& output, 
-                              const Line& line, 
-                              const Paragraph& paragraph,
-                              size_t width)
+static void render_line_of_paragraph(string& output, 
+                                     const Line& line, 
+                                     const Paragraph& paragraph,
+                                     size_t width)
 {
     // Find the total length of the words in the line
     size_t len = 0;

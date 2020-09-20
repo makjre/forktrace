@@ -68,7 +68,7 @@ bool is_log_enabled_for(Log category)
 
 /* Internal helper function that does the work of message but allows you to
  * opt for no log category at all (otherwise the same as message()). */
-void message_internal(optional<Log> logCategory, string_view message)
+static void message_internal(optional<Log> logCategory, string_view message)
 {
     string line;
     line.reserve(message.size() + 40);
