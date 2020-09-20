@@ -30,8 +30,10 @@ public:
         SHOW_FAILED_EXECS       = 1 << 1,
         SHOW_NON_FATAL_SIGNALS  = 1 << 2,
         SHOW_SIGNAL_SENDS       = 1 << 3,
+        MERGE_EXECS             = 1 << 4, // TODO!!!!!
     };
-    static constexpr int DEFAULT_OPTS = SHOW_EXECS | SHOW_SIGNAL_SENDS;
+    static constexpr int DEFAULT_OPTS = 
+        SHOW_EXECS | MERGE_EXECS | SHOW_SIGNAL_SENDS;
 
 private:
     /* Represents the location of a Process as viewed on the diagram. */

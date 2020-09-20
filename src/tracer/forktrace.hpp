@@ -14,10 +14,11 @@
 struct ForktraceOpts
 {
     bool reaper = true; // reaper enabled?
-    bool hideNonFatalSignals = true;
-    bool hideExecs = false;
-    bool hideFailedExecs = true;
-    bool hideSignalSends = true;
+    bool showNonFatalSignals = false;
+    bool showExecs = true;
+    bool showFailedExecs = false;
+    bool showSignalSends = false;
+    bool mergeExecs = true;
     size_t laneWidth = 4;
 };
 

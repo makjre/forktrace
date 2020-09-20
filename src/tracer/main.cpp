@@ -768,16 +768,20 @@ void register_options(ArgParser& parser, ForktraceOpts& settings)
     parser.start_new_group("Diagram options");
 
     parser.add("non-fatal", "yes|no", "show or hide non-fatal signals",
-        [&](string s) { settings.hideNonFatalSignals = !parse_bool(s); }
+        [&](string s) { settings.showNonFatalSignals = parse_bool(s); }
     );
     parser.add("execs", "yes|no", "show or hide successful execs",
-        [&](string s) { settings.hideExecs = !parse_bool(s); }
+        [&](string s) { settings.showExecs = parse_bool(s); }
     );
     parser.add("bad-execs", "yes|no", "show or hide failed execs",
-        [&](string s) { settings.hideFailedExecs = !parse_bool(s); }
+        [&](string s) { settings.showFailedExecs = parse_bool(s); }
     );
     parser.add("signal-sends", "yes|no", "show or hide sent signals",
-        [&](string s) { settings.hideSignalSends = !parse_bool(s); }
+        [&](string s) { settings.showSignalSends = parse_bool(s); }
+    );
+    parser.add("merge-execs", "yes|no", 
+        "if true, merge retried execs of the same program",
+        [&](string s) { settings.mergeExecs = parse_bool(s); }
     );
     parser.add("lane-width", "WIDTH", "set the diagram lane width",
         [&](string s) { settings.laneWidth = parse_number<size_t>(s); }

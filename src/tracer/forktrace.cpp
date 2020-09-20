@@ -414,21 +414,25 @@ void draw_tree(const Process& tree,
                function<void(const Diagram&)> drawer)
 {
     int flags = 0;
-    if (!opts.hideNonFatalSignals)
+    if (opts.showNonFatalSignals)
     {
         flags |= Diagram::SHOW_NON_FATAL_SIGNALS;
     }
-    if (!opts.hideExecs)
+    if (opts.showExecs)
     {
         flags |= Diagram::SHOW_EXECS;
     }
-    if (!opts.hideFailedExecs)
+    if (opts.showFailedExecs)
     {
         flags |= Diagram::SHOW_FAILED_EXECS;
     }
-    if (!opts.hideSignalSends)
+    if (opts.showSignalSends)
     {
         flags |= Diagram::SHOW_SIGNAL_SENDS;
+    }
+    if (opts.mergeExecs)
+    {
+        flags |= Diagram::MERGE_EXECS;
     }
     Diagram diagram(tree, opts.laneWidth, flags);
     drawer(diagram);
@@ -553,16 +557,20 @@ static void register_commands(CommandParser& parser,
         [&](string s) { opts.laneWidth = parse_number<size_t>(s); }
     );
     parser.add("show-non-fatal", "yes|no", "hide or show non-fatal signals",
-        [&](string s) { opts.hideNonFatalSignals = !parse_bool(s); }
+        [&](string s) { opts.showNonFatalSignals = parse_bool(s); }
     );
     parser.add("show-execs", "yes|no", "hide or show successful execs",
-        [&](string s) { opts.hideExecs = !parse_bool(s); }
+        [&](string s) { opts.showExecs = parse_bool(s); }
     );
     parser.add("show-bad-execs", "yes|no", "hide or show failed execs",
-        [&](string s) { opts.hideFailedExecs = !parse_bool(s); }
+        [&](string s) { opts.showFailedExecs = parse_bool(s); }
     );
     parser.add("show-signal-sends", "yes|no", "hide or show signal sends",
-        [&](string s) { opts.hideSignalSends = !parse_bool(s); }
+        [&](string s) { opts.showSignalSends = parse_bool(s); }
+    );
+    parser.add("merge-execs", "yes|no", 
+        "if true, merge retried execs of the same program",
+        [&](string s) { opts.mergeExecs = parse_bool(s); }
     );
 
     // Other
