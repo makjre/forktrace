@@ -1,3 +1,9 @@
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  forktrace
+ *
+ *      TODO
+ */
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/prctl.h>

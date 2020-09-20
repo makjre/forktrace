@@ -1,3 +1,9 @@
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  forktrace
+ *
+ *      TODO
+ */
 #ifndef FORKTRACE_FORKTRACE_HPP
 #define FORKTRACE_FORKTRACE_HPP
 
