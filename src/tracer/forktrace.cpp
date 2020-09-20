@@ -291,6 +291,7 @@ static void do_march(Tracer& tracer)
     tracer.step();
 }
 
+/* Callback for do_draw() to draw to the terminal */
 static void draw(const Diagram& diagram)
 {
     if (!diagram.result().print(std::cout))
@@ -367,8 +368,10 @@ static bool update_diagram_location(const Diagram& diagram,
     return false;
 }
 
+/* Callback for do_draw() to draw with the ScrollView. */
 static void view(const Diagram& diagram)
 {
+    log("Starting up the scroll-view...");
     size_t line = 0, lane = 0, x, y;
     int eventIndex;
     const Process* process = &diagram.leader();
@@ -407,6 +410,22 @@ static void view(const Diagram& diagram)
     view.set_line(get_event_info(selected), 1);
     view.set_cursor(x, y); // make the cursor point to that location
     view.run();
+}
+
+/* Callback for do_draw() to draw with either ScrollView or to the terminal
+ * depending on if the diagram can fit on the terminal screen. */
+static void draw_or_view(const Diagram& diagram)
+{
+    size_t width, height; // ignore height
+    if (get_terminal_size(width, height) && width < diagram.result().width())
+    {
+        log("The diagram to too big to fit, using the scroll view instead...");
+        view(diagram);
+    }
+    else
+    {
+        draw(diagram);
+    }
 }
 
 static void draw_tree(const Process& tree, 
@@ -651,7 +670,14 @@ static bool run(Tracer& tracer, ForktraceOpts& opts, vector<string> command)
             assert(!command.empty());
             trees.push_back(tracer.start(command[0], command));
             do_go(tracer, opts);
-            do_draw(trees, opts, {}, draw);
+            if (opts.forceScrollView)
+            {
+                do_draw(trees, opts, {}, view);
+            }
+            else
+            {
+                do_draw(trees, opts, {}, draw_or_view);
+            }
         }
         catch (const std::exception& e)
         {
@@ -666,7 +692,7 @@ static bool run(Tracer& tracer, ForktraceOpts& opts, vector<string> command)
  * all of the parsing of the command-line options. If !command.empty(), then we
  * run the specified command in forktrace from start to finish. Otherwise, we
  * go into our command line mode. */
-bool forktrace(vector<string> command, ForktraceOpts settings)
+bool forktrace(vector<string> command, ForktraceOpts opts)
 {
     //atexit(restore_terminal);
     register_signals();
@@ -686,7 +712,7 @@ bool forktrace(vector<string> command, ForktraceOpts settings)
      * also start the reaper thread, which reads from pipe onto the queue. */
     FILE* reaperPipe;
     std::optional<std::thread> reaper;
-    if (settings.reaper)
+    if (opts.reaper)
     {
         if (!(reaperPipe = start_reaper()))
         {
@@ -698,16 +724,16 @@ bool forktrace(vector<string> command, ForktraceOpts settings)
 
     /* Start the reaper and sigwait threads. */
     Tracer tracer;
-    if (settings.reaper)
+    if (opts.reaper)
     {
         reaper.emplace(reaper_thread, std::ref(tracer), reaperPipe);
     }
     std::thread sigwaiter(signal_thread, std::ref(tracer), set);
 
-    bool ok = run(tracer, settings, std::move(command));
+    bool ok = run(tracer, opts, std::move(command));
 
     join_sigwaiter(sigwaiter);
-    if (settings.reaper)
+    if (opts.reaper)
     {
         join_reaper(reaper.value(), reaperPipe);
         fclose(reaperPipe);

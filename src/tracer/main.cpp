@@ -383,10 +383,10 @@ void ArgParser::print_help() const
 {
     string_view me = program_name();
     std::cerr 
-        << "Start in interactive mode:\n"
+        << "Start up a command prompt (interactive mode):\n"
         << "  " << me << " [OPTIONS...]\n"
         << "\n"
-        << "Directly run a program in forktrace:\n"
+        << "Directly run a program in forktrace (instant mode):\n"
         << "  " << me << " [OPTIONS...] [--] program [ARGS...]\n"
         << "\n"
         << "Compile a program so that " << me << " can get more information:\n"
@@ -750,13 +750,13 @@ static void print_syscall(int syscall)
 }
 
 /* Registers all of our command line options with the argparser. */
-static void register_options(ArgParser& parser, ForktraceOpts& settings)
+static void register_options(ArgParser& parser, ForktraceOpts& opts)
 {
     parser.add("no-colour", 'c', "", "disables colours", 
         []{ set_colour_enabled(false); }
     );
     parser.add("no-reaper", "", "disables the sub-reaper process",
-        [&]{ settings.reaper = false; }
+        [&]{ opts.reaper = false; }
     );
     parser.add("status", "STATUS", "diagnose a wait(2) child status",
         [&](string s) { diagnose_status(parse_number<int>(s)); parser.exit(); }
@@ -767,24 +767,28 @@ static void register_options(ArgParser& parser, ForktraceOpts& settings)
 
     parser.start_new_group("Diagram options");
 
+    parser.add("scroll-view", 's', "", 
+        "always opt for the scroll-view when in instant mode",
+        [&]{ opts.forceScrollView = true; }
+    );
     parser.add("non-fatal", "yes|no", "show or hide non-fatal signals",
-        [&](string s) { settings.showNonFatalSignals = parse_bool(s); }
+        [&](string s) { opts.showNonFatalSignals = parse_bool(s); }
     );
     parser.add("execs", "yes|no", "show or hide successful execs",
-        [&](string s) { settings.showExecs = parse_bool(s); }
+        [&](string s) { opts.showExecs = parse_bool(s); }
     );
     parser.add("bad-execs", "yes|no", "show or hide failed execs",
-        [&](string s) { settings.showFailedExecs = parse_bool(s); }
+        [&](string s) { opts.showFailedExecs = parse_bool(s); }
     );
     parser.add("signal-sends", "yes|no", "show or hide sent signals",
-        [&](string s) { settings.showSignalSends = parse_bool(s); }
+        [&](string s) { opts.showSignalSends = parse_bool(s); }
     );
     parser.add("merge-execs", "yes|no", 
         "if true, merge retried execs of the same program",
-        [&](string s) { settings.mergeExecs = parse_bool(s); }
+        [&](string s) { opts.mergeExecs = parse_bool(s); }
     );
     parser.add("lane-width", "WIDTH", "set the diagram lane width",
-        [&](string s) { settings.laneWidth = parse_number<size_t>(s); }
+        [&](string s) { opts.laneWidth = parse_number<size_t>(s); }
     );
 
     parser.start_new_group("Logging options");
@@ -804,9 +808,9 @@ static bool do_all_the_things(int argc, const char** argv)
         return false;
     }
 
-    ForktraceOpts settings;
+    ForktraceOpts opts;
     ArgParser parser;
-    register_options(parser, settings);
+    register_options(parser, opts);
 
     ProgramAction action;
     vector<string> remainingArgs = parser.parse(argv, action);
@@ -815,7 +819,7 @@ static bool do_all_the_things(int argc, const char** argv)
     {
     case ProgramAction::RUN:
     case ProgramAction::CMDLINE:
-        return forktrace(std::move(remainingArgs), settings);
+        return forktrace(std::move(remainingArgs), opts);
     case ProgramAction::INJECT:
         return handle_inject_action(std::move(remainingArgs));
     case ProgramAction::EXIT:
