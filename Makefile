@@ -28,7 +28,8 @@ TRACER_SRCS = main.cpp \
         process.cpp \
         event.cpp \
 	ptrace.cpp \
-        tracer.cpp
+        tracer.cpp \
+        diagram.cpp
 
 TRACER_OBJS = $(patsubst %.cpp,$(BUILD_DIR)/tracer/%.o,$(TRACER_SRCS))
 

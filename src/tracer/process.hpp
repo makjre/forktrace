@@ -57,7 +57,6 @@ private:
 
     /* Private functions, described in source file */
     void add_event(std::unique_ptr<Event> ev, bool consumeLoc = false);
-    void add_event_silent(std::unique_ptr<Event> ev, bool consumeLoc = false);
     const ExecEvent* most_recent_exec(int startIndex = -1) const;
 
 public:

@@ -14,11 +14,10 @@
 #include <queue>
 #include <functional>
 
-#include "system.hpp"
-
 class Process; // defined in process.hpp
 struct Tracee;
 class Tracer;
+class BlockingCall; // defined in tracer.cpp
 
 /* The tracer will raise this exception when an event appears to occur out-of-
  * order or at a strange time. If this exception is raised, the tracer will
@@ -48,26 +47,6 @@ public:
     pid_t pid() const noexcept { return _pid; } // TODO noexcept needed here?
 };
 
-/* We use this class to keep track of blocking system calls. When a tracee 
- * reaches a syscall-entry-stop for a blocking syscall that we care about,
- * we'll use this class to maintain the state of the system call so that we
- * can finish it at a later time. This class may still be used to represent
- * system calls do not always block (e.g., wait/waitpid with WNOHANG). */
-class BlockingCall 
-{
-public:
-    virtual ~BlockingCall() { }
-
-    /* Returns false if the tracee died while trying to prepare or finalise
-     * the call. Throws an exception if some other error occurred. 
-     *
-     * Cleanup:
-     *  If false is returned, then reaping the tracee is left to the caller
-     */
-    virtual bool prepare(Tracer& tracer, Tracee& tracee) = 0;
-    virtual bool finalise(Tracer& tracer, Tracee& tracee) = 0;
-};
-
 /* Used for book-keeping by the Tracer class. */
 struct Tracee
 {
@@ -82,17 +61,17 @@ struct Tracee
     State state;
     int syscall;    // Current syscall, SYSCALL_NONE if not in one
     int signal;     // Pending signal to be delivered when next resumed
-    std::shared_ptr<Process> process;
     std::unique_ptr<BlockingCall> blockingCall;
+    std::shared_ptr<Process> process;
 
     /* Create a tracee started in the stopped state */
-    Tracee(pid_t pid, std::shared_ptr<Process> process)
-        : pid(pid), state(State::STOPPED), syscall(SYSCALL_NONE),
-        signal(0), process(std::move(process)) { }
+    Tracee(pid_t pid, std::shared_ptr<Process> process);
 
-    /* Need a default constructor for use with unordered_map<>::operator[] */
-    Tracee() : pid(-1), state(State::RUNNING), 
-        syscall(SYSCALL_NONE), signal(0) { }
+    /* Move constructor needed in some cases (or else STL gibberish ensues). */
+    Tracee(Tracee&&);
+
+    /* Need a destructor in source file to keep std::unique_ptr happy... */
+    ~Tracee();
 };
 
 /* All the public member functions are "thread-safe". */
@@ -152,12 +131,14 @@ private:
     void handle_fork(Tracee&);
     void handle_failed_fork(Tracee&);
     void handle_exec(Tracee&, const char*, const char**);
+    void handle_kill(Tracee&, pid_t, int, bool);
     void handle_new_location(Tracee&, unsigned, const char*, const char*);
     void handle_signal_stop(Tracee&, int);
     void handle_stopped(Tracee&, int);
     Tracee& add_tracee(pid_t, std::shared_ptr<Process>);
     void expect_ended(Tracee&);
     void initiate_wait(Tracee&, std::unique_ptr<BlockingCall>);
+    void on_sent_signal(Tracee&, pid_t, int, bool);
 
 public:
     Tracer() { }
@@ -174,7 +155,9 @@ public:
                                    std::vector<std::string> argv);
 
     /* Continue all tracees until they all stop. Returns true if there are any
-     * tracees remaining and false if all are dead. */
+     * tracees remaining (whether they are alive or dead) - e.g., if there are
+     * orphaned tracees that we haven't been notified about via notify_orphan
+     * yet, then this will still return true (even if all are dead). */
     bool step();
 
     /* Notify the tracer that an orphan has been reaped by the reaper process.

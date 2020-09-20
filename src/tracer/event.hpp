@@ -12,19 +12,19 @@
 #include <vector>
 #include <optional>
 
+#include "terminal.hpp"
 #include "log.hpp"
 
 class Process; // defined in process.h
 struct ExecEvent; // defined in this file
 
-constexpr auto DEFAULT_COLOUR = fg(fmt::color::white);
-constexpr auto EXITED_COLOUR = fg(fmt::color::green) | fmt::emphasis::bold;
-constexpr auto KILLED_COLOUR = fg(fmt::color::red) | fmt::emphasis::bold;
-constexpr auto SIGNAL_COLOUR = fg(fmt::color::yellow);
-constexpr auto EXEC_COLOUR = fg(fmt::color::blue) | fmt::emphasis::bold;
-constexpr auto BAD_EXEC_COLOUR = fg(fmt::color::red);
-constexpr auto BAD_WAIT_COLOUR = fg(fmt::color::red);
-constexpr auto SIGNAL_SEND_COLOUR = fg(fmt::color::magenta);
+constexpr auto EXITED_COLOUR = Colour::GREEN | Colour::BOLD;
+constexpr auto KILLED_COLOUR = Colour::RED | Colour::BOLD;
+constexpr auto SIGNAL_COLOUR = Colour::YELLOW;
+constexpr auto EXEC_COLOUR = Colour::BLUE | Colour::BOLD;
+constexpr auto BAD_EXEC_COLOUR = Colour::RED;
+constexpr auto BAD_WAIT_COLOUR = Colour::RED;
+constexpr auto SIGNAL_SEND_COLOUR = Colour::MAGENTA;
 
 /* An interface that Event objects need to draw themselves. The renderer draws
  * the diagram line by line. As the renderer draws a line (from left to right)
@@ -37,16 +37,12 @@ public:
     /* Moves the cursor back (to the left) by the specified number of steps. */
     virtual void backtrack(size_t steps = 1) = 0;
 
-    /* Draws a single character with the current colour. If the second param
-     * is provided, then the character is repeated the specified number of
-     * times. */
-    virtual void draw_char(const fmt::text_style& style, 
-                           char ch, 
-                           size_t count = 1) = 0;
+    /* Draws a single character with the colour. If the second param is given,
+     * then the character is repeated the specified number of times. */
+    virtual void draw_char(Colour c, char ch, size_t count = 1) = 0;
 
-    /* Draws a string with the specified text style. */
-    virtual void draw_string(const fmt::text_style& style, 
-                             std::string_view str) = 0;
+    /* Draws a string with the specified colour. */
+    virtual void draw_string(Colour c, std::string_view str) = 0;
 };
 
 struct SourceLocation 
@@ -80,7 +76,7 @@ struct LinkEvent : Event
 
     virtual const Process& linked_path() const = 0; // return the partner
     virtual char link_char() const = 0; // character used to draw the path
-    virtual fmt::text_style link_colour() const { return DEFAULT_COLOUR; }
+    virtual Colour link_colour() const { return Colour::DEFAULT; }
 };
 
 /* An event that generates a child who sends SIGCHLD to the parent */
@@ -143,7 +139,7 @@ struct ReapEvent : LinkEvent
     virtual void draw(IEventRenderer& renderer) const;
     virtual const Process& linked_path() const { return *child.get(); }
     virtual char link_char() const;
-    virtual fmt::text_style link_colour() const;
+    virtual Colour link_colour() const;
 };
 
 /* A process sends a signal to either itself, a process group, or it sends it

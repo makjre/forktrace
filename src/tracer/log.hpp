@@ -9,14 +9,13 @@
 
 #include <string>
 #include <fmt/core.h>
-#include <fmt/color.h>
 #include <fmt/format.h>
 
 /* Describes types of log messages. We can ask the logger to filter these out
  * by their type so that we only see certain types of messages. */
 enum class Log
 {
-    ERR,    // For error messages from forktrace
+    ERROR,  // For error messages from forktrace
     WARN,   // Warning messages
     LOG,    // general logging information
     VERB,   // verbose log messages
@@ -97,7 +96,7 @@ inline void warning(std::string_view fmtStr, Args... args)
 template <typename ...Args>
 inline void error(std::string_view fmtStr, Args... args)
 {
-    message(Log::ERR, fmt::format(fmtStr, args...));
+    message(Log::ERROR, fmt::format(fmtStr, args...));
 }
 
 template <typename ...Args>
@@ -111,15 +110,6 @@ inline void debug(std::string_view fmtStr, Args... args)
 {
     message(Log::DBG, fmt::format(fmtStr, args...));
 }
-
-/* If false, then calls to colour() (below) will not add any colour. Despite
- * modifying global state, this function is thread-safe (atomic store). */
-void set_colour_enabled(bool enabled);
-
-/* Takes the string and applies escape codes to it so that terminals will show
- * it with the specified colour. Does nothing if set_colour_enabled(false). We
- * are using the colouring features from libfmt. */
-std::string colour(const fmt::text_style& style, std::string_view str);
 
 /* A wrapper around a number so that when we pass it to a libfmt format string
  * it prints out an indent of some amount. */

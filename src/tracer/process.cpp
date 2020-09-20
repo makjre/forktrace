@@ -73,19 +73,6 @@ const ExecEvent* Process::most_recent_exec(int startIndex) const
     return nullptr;
 }
 
-/* A version of add_event that doesn't log anything. */
-void Process::add_event_silent(unique_ptr<Event> event, bool consumeLocation) 
-{
-    process_assert(_state == State::ALIVE, 
-        "add_event_silent({}) called when state != ALIVE", event->to_string());
-    if (_location.has_value() && consumeLocation) 
-    {
-        event->location = std::move(_location);
-        _location.reset();
-    }
-    _events.push_back(std::move(event));
-}
-
 /* Add this event to the list and log it out. Throws ProcessTreeError if the
  * process has already ended. If `consumeLocation` is true, then the current
  * source location is **moved** into the provided event if it exists. Events
@@ -299,17 +286,32 @@ void Process::notify_sent_signal(pid_t killedId,
     if (dest && (dest != &source) && (dest->pid() == killedId)) 
     {
         // This corresponds to two a signal sent between two distinct processes
-        // that are both present in this process tree. Make sure to add one
-        // instance of the event silently, so we don't log it twice.
+        // that are both present in this process tree.
         auto info = make_shared<KillInfo>(source, *dest, signal, toThread);
-        // Both processes get a handle to the shared kill information
-        // The source process consumes their source location (since forktrace.h
+
+        // Both processes get a handle to the shared kill information. The 
+        // source process consumes their source location (since forktrace.h
         // will update location when kill/tkill/tkill is called).
-        // TODO dodge? check hacked fixes in master branch
-        source.add_event(
-            make_unique<KillEvent>(source, info, true), true);
-        dest->add_event_silent(
-            make_unique<KillEvent>(*dest, std::move(info), false));
+        source.add_event(make_unique<KillEvent>(source, info, true), true);
+
+        // Some signals like SIGKILL will kill the process instantly, so the 
+        // death event will already be there. In that case, we want to put the 
+        // kill event before it, so we'll swap them out. In both cases, we
+        // add the event directly (eschewing add_event) since we don't want
+        // to log the KillEvent twice (the source already did that just above).
+        if (dest->dead())
+        {
+            assert(!dest->_events.empty());
+            unique_ptr<Event>& deathEvent = dest->_events.back();
+            dest->_events.push_back(
+                make_unique<KillEvent>(*dest, std::move(info), false));
+            swap(deathEvent, dest->_events.back());
+        } 
+        else 
+        {
+            dest->_events.push_back(
+                make_unique<KillEvent>(*dest, move(info), false));
+        }
     } 
     else 
     {

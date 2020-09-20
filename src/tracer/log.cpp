@@ -12,6 +12,7 @@
 
 #include "log.hpp"
 #include "util.hpp"
+#include "terminal.hpp"
 
 using std::string;
 using std::string_view;
@@ -24,19 +25,16 @@ static string gProgramName;
 /* Stores whether or not each log category is currently enabled or not... */
 static std::atomic<bool> gLogCategoryEnabled[size_t(Log::NUM_LOG_CATEGORIES)];
 
-/* Affects how colour() behaves. */
-static std::atomic<bool> gColourEnabled = true;
-
 // Colours other settings for our log messages
 constexpr string_view PREFIX = "[forktrace] ";
-constexpr fmt::text_style PREFIX_COLOUR = fg(fmt::color::gray);
-constexpr fmt::text_style ERROR_COLOUR = fg(fmt::color::crimson) | fmt::emphasis::bold;
-constexpr fmt::text_style WARNING_COLOUR = fg(fmt::color::medium_purple) | fmt::emphasis::bold;
-constexpr fmt::text_style DEBUG_COLOUR = fg(fmt::color::gray) | fmt::emphasis::bold;
+constexpr Colour PREFIX_COLOUR = Colour::GREY;
+constexpr Colour ERROR_COLOUR = Colour::RED | Colour::BOLD;
+constexpr Colour WARNING_COLOUR = Colour::PURPLE | Colour::BOLD;
+constexpr Colour DEBUG_COLOUR = Colour::GREY | Colour::BOLD;
 
 bool init_log(const char* argv0)
 {
-    set_log_category_enabled(Log::ERR, true);
+    set_log_category_enabled(Log::ERROR, true);
     set_log_category_enabled(Log::WARN, true);
     set_log_category_enabled(Log::LOG, true);
     set_log_category_enabled(Log::VERB, false);
@@ -79,7 +77,7 @@ void message_internal(optional<Log> logCategory, string_view message)
     {
         switch (logCategory.value())
         {
-        case Log::ERR:
+        case Log::ERROR:
             line += colour(ERROR_COLOUR, "error: "); 
             break;
         case Log::WARN: 
@@ -119,18 +117,4 @@ void print_str(string_view message)
 void message_always(Log category, string_view message)
 {
     message_internal({category}, message);
-}
-
-void set_colour_enabled(bool enabled)
-{
-    gColourEnabled = enabled;
-}
-
-string colour(const fmt::text_style& style, std::string_view str)
-{
-    if (!gColourEnabled)
-    {
-        return string(str);
-    }
-    return fmt::format(style, "{}", str);
 }

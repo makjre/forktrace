@@ -8,6 +8,11 @@
 struct ForktraceOpts
 {
     bool reaper = true; // reaper enabled?
+    bool hideNonFatalSignals = true;
+    bool hideExecs = false;
+    bool hideFailedExecs = true;
+    bool hideSignalSends = true;
+    size_t laneWidth = 4;
 };
 
 /* Runs the specified command in forktrace. If the command is empty, or if the

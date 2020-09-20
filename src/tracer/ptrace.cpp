@@ -196,6 +196,11 @@ static int exit_status_to_errno(int exitStatus)
 /* Helper function for start() to exec the traced child process. */
 static void setup_child(string_view program, vector<string> argv)
 {
+    // don't want children to inherit our blocked signals
+    sigset_t set;
+    sigfillset(&set);
+    pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
+
     if (ptrace(PTRACE_TRACEME, 0, 0, 0) == -1)
     {
         _exit(errno_to_exit_status(errno));

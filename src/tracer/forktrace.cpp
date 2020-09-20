@@ -10,6 +10,7 @@
 #include <iostream>
 #include <thread>
 #include <optional>
+#include <functional>
 #include <atomic>
 
 #include "forktrace.hpp"
@@ -20,12 +21,15 @@
 #include "command.hpp"
 #include "tracer.hpp"
 #include "process.hpp"
+#include "diagram.hpp"
 
 using std::string;
 using std::string_view;
 using std::vector;
 using std::map;
 using std::shared_ptr;
+using std::runtime_error;
+using std::function;
 using fmt::format;
 
 /* A dummy exception object that we'll use to indicate when we want to exit
@@ -66,10 +70,16 @@ static void register_signals()
     sigaction(SIGUSR1, &sa, 0);
 }
 
+/******************************************************************************
+ * REAPER AND SIGWATER THREADS
+ *****************************************************************************/
+
+/* This is where we can assign actions to SIGINT (Ctrl+C). For this to work,
+ * SIGINT must be blocked with pthread_sigmask so that it doesn't kill us. */
 static void signal_thread(Tracer& tracer, sigset_t set) 
 {
     int sig;
-    while (sigwait(&set, &sig) == 0) 
+    while (sigwait(&set, &sig) == 0) // wait for the next signal
     {
         if (gDone) 
         {
@@ -81,9 +91,8 @@ static void signal_thread(Tracer& tracer, sigset_t set)
 }
 
 /* It's the caller's responsibility to close the file. This thread reads PIDs
- * of orphaned processes from the reaper (our parent) and puts them on the
- * list of orphans. You can cancel this by setting gDone == false and sending
- * a signal (without SA_RESTART) to cancel any current read calls. */
+ * of orphaned processes from the reaper (our parent) and lets the tracer know
+ * about them. We are reading from the reaper proces. */
 static void reaper_thread(Tracer& tracer, FILE* fromReaper) 
 {
     for (;;) 
@@ -121,7 +130,6 @@ failed:
     kill(child, SIGHUP);
     waitpid(child, nullptr, 0);
     _exit(1);
-    /* NOTREACHED */
 }
 
 static FILE* start_reaper() 
@@ -213,20 +221,25 @@ static void join_reaper(std::thread& reaper, FILE* reaperPipe)
     reaper.join();
 }
 
-shared_ptr<Process> do_start(Tracer& tracer, vector<string> args)
+/******************************************************************************
+ * COMMANDS
+ *****************************************************************************/
+
+static shared_ptr<Process> do_start(Tracer& tracer, vector<string> args)
 {
     if (args.empty())
     {
-        throw std::runtime_error("Expected: PROGRAM [ARGS...]");
+        throw runtime_error("Expected: PROGRAM [ARGS...]");
     }
     return tracer.start(args[0], args);
 }
 
-void do_tree(const vector<shared_ptr<Process>>& trees, vector<string> args)
+static void do_tree(const vector<shared_ptr<Process>>& trees, 
+                    vector<string> args)
 {
     if (args.size() > 1)
     {
-        throw std::runtime_error("Expected no more than one argument.");
+        throw runtime_error("Expected no more than one argument.");
     }
     if (args.empty())
     {
@@ -236,7 +249,7 @@ void do_tree(const vector<shared_ptr<Process>>& trees, vector<string> args)
         }
         for (size_t i = 0; i < trees.size(); ++i)
         {
-            std::cerr << format(fmt::emphasis::bold, "Process tree {}:\n", i);
+            std::cerr << colour(Colour::BOLD, format("Process tree {}:\n", i));
             trees[i]->print_tree();
         }
     }
@@ -245,13 +258,13 @@ void do_tree(const vector<shared_ptr<Process>>& trees, vector<string> args)
         size_t i = parse_number<size_t>(args[0]);
         if (i >= trees.size())
         {
-            throw std::runtime_error("Out-of-bounds process tree index.");
+            throw runtime_error("Out-of-bounds process tree index.");
         }
         trees[i]->print_tree();
     }
 }
 
-void do_trees(const vector<shared_ptr<Process>>& trees)
+static void do_trees(const vector<shared_ptr<Process>>& trees)
 {
     if (trees.empty())
     {
@@ -263,7 +276,7 @@ void do_trees(const vector<shared_ptr<Process>>& trees)
     }
 }
 
-void do_next(Tracer& tracer)
+static void do_march(Tracer& tracer)
 {
     if (!tracer.tracees_alive())
     {
@@ -272,10 +285,207 @@ void do_next(Tracer& tracer)
     tracer.step();
 }
 
+static void draw(const Diagram& diagram)
+{
+    if (!diagram.result().print(std::cout))
+    {
+        warning("Had to truncate the diagram. Try the scroll view instead.");
+    }
+}
+
+/* Helper function for view(). Returns a string describing the currently 
+ * selected event on the process diagram. */
+static string get_event_info(const Event* selected) 
+{
+    if (!selected) 
+    {
+        return "";
+    }
+    if (!selected->location.has_value()) 
+    {
+        return selected->to_string();
+    }
+    return format("{} @ {}", 
+        selected->to_string(), selected->location->to_string());
+}
+
+/* Helper function for view(). Returns a string describing the currently 
+ * selected process on the process diagram. */
+static string get_process_info(const Process* selected, int eventIndex) 
+{
+    if (!selected) 
+    {
+        return "";
+    }
+    return format("process {} {}", selected->pid(), 
+        selected->command_line(eventIndex + 1)); // TODO explain
+}
+
+/* Take a key press and figure out the new position (in terms of line and lane
+ * coordinates) for the cursor on the diagram. Will handle clipping at edges of
+ * the diagram. Returns true if the new values of lane and line were changed
+ * from what they previous were (and modifies them correspondingly). This is
+ * a helper function for view(). */
+static bool update_diagram_location(const Diagram& diagram, 
+                                    int key, 
+                                    size_t& lane, 
+                                    size_t& line) 
+{
+    size_t newLane = lane, newLine = line;
+    switch (key) 
+    {
+        case KEY_LEFT: 
+            newLane = std::max(lane, 1UL) - 1; 
+            break;
+        case KEY_RIGHT: 
+            newLane += 1; 
+            break;
+        case KEY_UP: 
+            newLine = std::max(line, 1UL) - 1; 
+            break;
+        case KEY_DOWN: 
+            newLine += 1; 
+            break;
+        default: 
+            assert(!"Unreachable");
+    }
+    newLane = std::min(newLane, diagram.lane_count() - 1);
+    newLine = std::min(newLine, diagram.line_count() - 1);
+
+    if (newLane != lane || newLine != line) 
+    {
+        lane = newLane;
+        line = newLine;
+        return true;
+    }
+    return false;
+}
+
+void view(const Diagram& diagram)
+{
+    size_t line = 0, lane = 0, x, y;
+    int eventIndex;
+    const Process* process = &diagram.leader();
+    const Event* selected = diagram.find(lane, line, process, eventIndex);
+    diagram.get_coords(lane, line, x, y); // convert to x/y coords
+
+    auto onKeyPress = [&](ScrollView& view, int key) {
+        switch (key) {
+            case KEY_LEFT:
+            case KEY_RIGHT:
+            case KEY_UP:
+            case KEY_DOWN:
+                if (!update_diagram_location(diagram, key, lane, line)) 
+                {
+                    view.beep();
+                }
+                selected = diagram.find(lane, line, process, eventIndex);
+                diagram.get_coords(lane, line, x, y);
+                view.set_line(get_process_info(process, eventIndex), 0);
+                view.set_line(get_event_info(selected), 1);
+                view.set_cursor(x, y);
+                break;
+            case 'q':
+                view.quit();
+                break;
+            default:
+                view.beep();
+                break;
+        }
+    };
+
+    string help = "Arrow keys to navigate, q to quit.";
+    // TODO disable logging?
+    ScrollView view(diagram.result(), std::move(help), onKeyPress);
+    view.set_line(get_process_info(process, eventIndex), 0);
+    view.set_line(get_event_info(selected), 1);
+    view.set_cursor(x, y); // make the cursor point to that location
+    view.run();
+}
+
+void draw_tree(const Process& tree, 
+               const ForktraceOpts& opts,
+               function<void(const Diagram&)> drawer)
+{
+    int flags = 0;
+    if (!opts.hideNonFatalSignals)
+    {
+        flags |= Diagram::SHOW_NON_FATAL_SIGNALS;
+    }
+    if (!opts.hideExecs)
+    {
+        flags |= Diagram::SHOW_EXECS;
+    }
+    if (!opts.hideFailedExecs)
+    {
+        flags |= Diagram::SHOW_FAILED_EXECS;
+    }
+    if (!opts.hideSignalSends)
+    {
+        flags |= Diagram::SHOW_SIGNAL_SENDS;
+    }
+    Diagram diagram(tree, opts.laneWidth, flags);
+    drawer(diagram);
+    if (diagram.truncated())
+    {
+        warning("Had to truncate some lanes. Try a larger lane width.");
+    }
+}
+
+void do_draw(vector<shared_ptr<Process>>& trees, 
+             const ForktraceOpts& opts,
+             vector<string> args,
+             function<void(const Diagram&)> drawer)
+{
+    if (args.empty())
+    {
+        if (trees.empty())
+        {
+            std::cerr << "There are no process trees yet.\n";
+        }
+        for (size_t i = 0; i < trees.size(); ++i)
+        {
+            std::cerr << colour(Colour::BOLD, format("Process tree {}:\n", i));
+            draw_tree(*trees[i].get(), opts, drawer);
+        }
+    }
+    else if (args.size() > 1)
+    {
+        throw runtime_error("Expected no more than one argument.\n");
+    }
+    else
+    {
+        size_t i = parse_number<size_t>(args[0]);
+        if (i >= trees.size())
+        {
+            throw runtime_error("Out-of-bounds process tree index.");
+        }
+        draw_tree(*trees[i].get(), opts, drawer);
+    }
+}
+
+void do_go(Tracer& tracer, const ForktraceOpts& opts)
+{
+    while (tracer.step())
+    {
+        // step() will return false when there are no tracees left, however,
+        // if the reaper process is disabled, then we will never be able to
+        // clear the list of tracees, so we'll loosen the condition to stop
+        // step()ing to be that there can be no alive tracees left (instead of
+        // the stronger condition of no tracees at all).
+        if (!opts.reaper && !tracer.tracees_alive())
+        {
+            return;
+        }
+    }
+}
+
 static void register_commands(CommandParser& parser,
                               Tracer& tracer,
+                              ForktraceOpts& opts,
                               vector<shared_ptr<Process>>& trees)
 {
+    // General config
     parser.add("colour", "ENABLED", "enable/disable colour",
         [](string s) { set_colour_enabled(parse_bool(s)); }
     );
@@ -285,13 +495,10 @@ static void register_commands(CommandParser& parser,
     parser.add("verbose", "ENABLED", "enable/disable extra log messages",
         [](string s) { set_log_category_enabled(Log::VERB, parse_bool(s)); }
     );
+
+    // Viewing the process tree
     parser.add("list", "", "print a list of all tracees",
         [&] { tracer.print_list(); }
-    );
-    parser.add("start", "PROGRAM [ARGS...]", "start a tracee program",
-        [&](vector<string> args) { 
-            trees.push_back(do_start(tracer, std::move(args))); 
-        }
     );
     parser.add("tree", "[TREE]", 
         "debug output for a process tree, or all if none specified",
@@ -300,19 +507,67 @@ static void register_commands(CommandParser& parser,
     parser.add("trees", "", "print a list of all the process trees",
         [&] { do_trees(trees); }
     );
-    parser.add("run", "PROGRAM [ARGS...]", "same as start & resume",
+    parser.add("draw", "[TREE]", 
+        "draw a process tree, or all if none specified",
         [&](vector<string> args) { 
-            trees.push_back(do_start(tracer, std::move(args))); 
-            while (tracer.step()) { }
+            do_draw(trees, opts, std::move(args), draw); 
         }
     );
-    parser.add("next", "", "resume all tracees until they stop again",
-        [&] { do_next(tracer); },
-    true);
+    parser.add("view", "[TREE]",
+        "view a process tree in a scrollable window (defaults to tree 0)",
+        [&](vector<string> args) { 
+            do_draw(trees, opts, std::move(args), view); 
+        }
+    );
+
+    // Starting/stopping/etc.
+    parser.add("start", "PROGRAM [ARGS...]", "start a tracee program",
+        [&](vector<string> args) { 
+            trees.push_back(do_start(tracer, std::move(args))); 
+        }
+    );
+    parser.add("run", "PROGRAM [ARGS...]", "same as start & go",
+        [&](vector<string> args) { 
+            trees.push_back(do_start(tracer, std::move(args))); 
+            do_go(tracer, opts);
+        }
+    );
+    parser.add("march", "", "resume all tracees until they stop again",
+        [&] { do_march(tracer); }, true
+    );
+    parser.add("next", "", "equivalent to \"march\" followed by \"draw\"",
+        [&] { do_march(tracer); do_draw(trees, opts, {}, draw); }, true
+    );
+    parser.add("go", "", "resumes all tracees until until they end",
+        [&] { do_go(tracer, opts); }
+    );
+
+    // Diagram config options
+    parser.add("lane-width", "WIDTH", "set the diagram lane width",
+        [&](string s) { opts.laneWidth = parse_number<size_t>(s); }
+    );
+    parser.add("hide-non-fatal", "yes|no", "hide or show non-fatal signals",
+        [&](string s) { opts.hideNonFatalSignals = parse_bool(s); }
+    );
+    parser.add("hide-execs", "yes|no", "hide or show successful execs",
+        [&](string s) { opts.hideExecs = parse_bool(s); }
+    );
+    parser.add("hide-bad-execs", "yes|no", "hide or show failed execs",
+        [&](string s) { opts.hideFailedExecs = parse_bool(s); }
+    );
+    parser.add("hide-signal-sends", "yes|no", "hide or show signal sends",
+        [&](string s) { opts.hideSignalSends = parse_bool(s); }
+    );
+
+    // Other
     parser.add("quit", "", "quit " + string(program_name()),
         [] { throw QuitCommandLoop(); }
     );
 }
+
+/******************************************************************************
+ * MAIN COMMAND LOOP, ETC.
+ *****************************************************************************/
 
 static bool confirm_quit(Tracer& tracer, bool dueToEOF)
 {
@@ -364,11 +619,11 @@ static void command_line(CommandParser& cmdline, Tracer& tracer)
     }
 }
 
-static bool run(Tracer& tracer, vector<string> command)
+static bool run(Tracer& tracer, ForktraceOpts& opts, vector<string> command)
 {
     vector<shared_ptr<Process>> trees; // root of each process tree
     CommandParser cmdline;
-    register_commands(cmdline, tracer, trees);
+    register_commands(cmdline, tracer, opts, trees);
     if (command.empty())
     {
         verbose("No command provided. Going into command line mode.");
@@ -381,12 +636,8 @@ static bool run(Tracer& tracer, vector<string> command)
         {
             assert(!command.empty());
             trees.push_back(tracer.start(command[0], command));
-            while (tracer.step()) { }
-            for (size_t i = 0; i < trees.size(); ++i)
-            {
-                std::cerr << format("Process tree {}:\n", i);
-                trees[i]->print_tree();
-            }
+            do_go(tracer, opts);
+            do_draw(trees, opts, {}, draw);
         }
         catch (const std::exception& e)
         {
@@ -408,7 +659,9 @@ bool forktrace(vector<string> command, ForktraceOpts settings)
 
     /* Block SIGINT so it doesn't kill us (we want to sigwait it). We need to
      * do this before creating the sigwait thread and the reaper thread (via
-     * start_reaper) so that all threads inherit it. */
+     * start_reaper) so that all threads inherit it. We also do it before we
+     * create the reaper so that SIGINT doesn't kill that either. start_tracee
+     * will make sure that children don't inherit any of this for us. */
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGINT);
@@ -437,7 +690,7 @@ bool forktrace(vector<string> command, ForktraceOpts settings)
     }
     std::thread sigwaiter(signal_thread, std::ref(tracer), set);
 
-    bool ok = run(tracer, std::move(command));
+    bool ok = run(tracer, settings, std::move(command));
 
     join_sigwaiter(sigwaiter);
     if (settings.reaper)

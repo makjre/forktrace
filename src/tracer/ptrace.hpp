@@ -51,7 +51,8 @@
  *      - PTRACE_O_TRACEEXEC: Automatically stop at the next successful exec.
  *      - PTRACE_O_TRACECLONE: Automatically trace cloned children.
  *      - PTRACE_O_TRACESYSGOOD: Helps disambiguate syscalls from other events.
- */
+ *
+ * Also prevents the child from inheriting any of our blocked signals. */
 pid_t start_tracee(std::string_view program, std::vector<std::string> argv);
 
 /* Resumes the traced process. Throws system_error on failure (which will

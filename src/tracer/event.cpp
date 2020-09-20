@@ -106,7 +106,7 @@ string WaitEvent::to_string() const
 
 void WaitEvent::draw(IEventRenderer& renderer) const 
 {
-    renderer.draw_char((error == 0) ? DEFAULT_COLOUR : BAD_WAIT_COLOUR, 'w');
+    renderer.draw_char((error == 0) ? Colour::DEFAULT : BAD_WAIT_COLOUR, 'w');
 }
     
 ReapEvent::ReapEvent(Process& owner, 
@@ -157,7 +157,7 @@ char ReapEvent::link_char() const
     return child->killed() ? '~' : '-';
 }
 
-fmt::text_style ReapEvent::link_colour() const 
+Colour ReapEvent::link_colour() const 
 {
     return child->killed() ? KILLED_COLOUR : EXITED_COLOUR;
 }
@@ -256,7 +256,7 @@ void SignalEvent::draw(IEventRenderer& renderer) const
     if (owner.orphaned()) 
     {
         renderer.backtrack();
-        renderer.draw_char(DEFAULT_COLOUR, '[');
+        renderer.draw_char(Colour::DEFAULT, '[');
     } 
     else if (!owner.reaped()) 
     {
@@ -268,7 +268,7 @@ void SignalEvent::draw(IEventRenderer& renderer) const
 
     if (owner.orphaned()) 
     {
-        renderer.draw_char(DEFAULT_COLOUR, ']');
+        renderer.draw_char(Colour::DEFAULT, ']');
     }
 }
 
@@ -282,14 +282,14 @@ void ExitEvent::draw(IEventRenderer& renderer) const
     if (owner.orphaned()) 
     {
         renderer.backtrack();
-        renderer.draw_char(DEFAULT_COLOUR, '(');
+        renderer.draw_char(Colour::DEFAULT, '(');
     }
 
     renderer.draw_string(EXITED_COLOUR, std::to_string(status));
 
     if (owner.orphaned()) 
     {
-        renderer.draw_char(DEFAULT_COLOUR, ')');
+        renderer.draw_char(Colour::DEFAULT, ')');
     }
 }
 

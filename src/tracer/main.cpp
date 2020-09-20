@@ -423,9 +423,9 @@ void ArgParser::print_help() const
             string line;
             if (opt->shortName != '\0')
             {
-                line += format(fmt::emphasis::bold, "-{} ", opt->shortName);
+                line += colour(Colour::BOLD, format("-{} ", opt->shortName));
             }
-            line += format(fmt::emphasis::bold, "--{}", opt->name);
+            line += colour(Colour::BOLD, format("--{}", opt->name));
             if (!opt->param.empty())
             {
                 line += '=' + opt->param;
@@ -763,6 +763,24 @@ void register_options(ArgParser& parser, ForktraceOpts& settings)
     );
     parser.add("syscall", "NUMBER", "print info about a syscall number",
         [&](string s) { print_syscall(parse_number<int>(s)); parser.exit(); }
+    );
+
+    parser.start_new_group("Diagram options");
+
+    parser.add("non-fatal", "yes|no", "show or hide non-fatal signals",
+        [&](string s) { settings.hideNonFatalSignals = !parse_bool(s); }
+    );
+    parser.add("execs", "yes|no", "show or hide successful execs",
+        [&](string s) { settings.hideExecs = !parse_bool(s); }
+    );
+    parser.add("bad-execs", "yes|no", "show or hide failed execs",
+        [&](string s) { settings.hideFailedExecs = !parse_bool(s); }
+    );
+    parser.add("signal-sends", "yes|no", "show or hide sent signals",
+        [&](string s) { settings.hideSignalSends = !parse_bool(s); }
+    );
+    parser.add("lane-width", "WIDTH", "set the diagram lane width",
+        [&](string s) { settings.laneWidth = parse_number<size_t>(s); }
     );
 
     parser.start_new_group("Logging options");

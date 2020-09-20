@@ -134,7 +134,7 @@ void CommandParser::help_handler(vector<string> args) const
             return;
         }
         string cmd = it->first + ' ' + it->second.params;
-        std::cerr << colour(fmt::emphasis::bold, cmd) << '\n';
+        std::cerr << colour(Colour::BOLD, cmd) << '\n';
         std::cerr << wrap_text_to_screen(it->second.help, false, 0);
         return;
     }
@@ -153,7 +153,7 @@ void CommandParser::help_handler(vector<string> args) const
         size_t width = 0, height = 0;
         get_terminal_size(width, height); // this could fail (and return false)
 
-        string line = colour(fmt::emphasis::bold, name);
+        string line = colour(Colour::BOLD, name);
         if (!command.params.empty())
         {
             line += ' ' + command.params;

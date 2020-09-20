@@ -9,6 +9,7 @@
 
 #include "tracer.hpp"
 #include "process.hpp"
+#include "system.hpp"
 #include "util.hpp"
 #include "ptrace.hpp"
 
@@ -20,6 +21,10 @@ using std::unique_ptr;
 using std::system_error;
 using std::generic_category;
 using fmt::format;
+
+/******************************************************************************
+ * ERROR HANDLING
+ *****************************************************************************/
 
 BadTraceError::BadTraceError(pid_t pid, string_view msg) : _pid(pid)
 {
@@ -58,6 +63,50 @@ static BadTraceError diagnose_bad_event(Tracee& tracee, int status, string msg)
         }
     }
     return BadTraceError(tracee.pid, msg);
+}
+
+/******************************************************************************
+ * BLOCKING CALL CLASSES
+ *****************************************************************************/
+
+/* We use this class to keep track of blocking system calls. When a tracee 
+ * reaches a syscall-entry-stop for a blocking syscall that we care about,
+ * we'll use this class to maintain the state of the system call so that we
+ * can finish it at a later time. This class may still be used to represent
+ * system calls do not always block (e.g., wait/waitpid with WNOHANG). */
+class BlockingCall 
+{
+public:
+    virtual ~BlockingCall() { }
+
+    /* Returns false if the tracee died while trying to prepare or finalise
+     * the call. Throws an exception if some other error occurred. 
+     *
+     * Cleanup:
+     *  If false is returned, then reaping the tracee is left to the caller
+     */
+    virtual bool prepare(Tracer& tracer, Tracee& tracee) = 0;
+    virtual bool finalise(Tracer& tracer, Tracee& tracee) = 0;
+};
+
+Tracee::Tracee(pid_t pid, shared_ptr<Process> process)
+    : pid(pid), state(STOPPED), syscall(SYSCALL_NONE),
+    signal(0), process(std::move(process))
+{
+    // has to go after declaration of BlockingCall to keep unique_ptr happy
+}
+
+Tracee::Tracee(Tracee&& tracee) 
+    : pid(tracee.pid), state(tracee.state), syscall(tracee.syscall), 
+    signal(tracee.signal), blockingCall(std::move(tracee.blockingCall)),
+    process(std::move(tracee.process))
+{
+    // has to go after declaration of BlockingCall to keep unique_ptr happy
+}
+
+Tracee::~Tracee()
+{
+    // has to go after declaration of BlockingCall to keep unique_ptr happy
 }
 
 /* A sub-class of BlockingCall specialised for wait calls (wait4 or waitid).
@@ -142,6 +191,10 @@ public:
 
     virtual bool finalise(Tracer& tracer, Tracee& t);
 };
+
+/******************************************************************************
+ * EVENT TRACING LOGIC
+ *****************************************************************************/
 
 template <class Result, bool ZeroTheResult, int ResultArgIndex>
 bool WaitCall<Result, ZeroTheResult, ResultArgIndex>
@@ -491,6 +544,90 @@ void Tracer::initiate_wait(Tracee& tracee, unique_ptr<BlockingCall> wait)
     tracee.blockingCall = std::move(wait);
 }
 
+void Tracer::on_sent_signal(Tracee& tracee, 
+                            pid_t target, 
+                            int signal, 
+                            bool toThread)
+{
+    Process& source = *tracee.process.get();
+    Process* dest = nullptr;
+    auto it = _tracees.find(target);
+    if (it != _tracees.end())
+    {
+        dest = it->second.process.get();
+    }
+    Process::notify_sent_signal(target, source, dest, signal, toThread);
+}
+
+/* For kill/tgkill/tkill */
+void Tracer::handle_kill(Tracee& tracee, 
+                         pid_t target, 
+                         int signal, 
+                         bool toThread)
+{
+    if (!resume(tracee))
+    {
+        return;
+    }
+
+    // we won't use the wait_for_stop helper function here, since we need a bit
+    // more manual control to handle the case where the tracee SIGKILLs itself.
+    int status;
+    if (waitpid(tracee.pid, &status, 0) == -1) 
+    {
+        if (errno == ECHILD)
+        {
+            throw BadTraceError(tracee.pid, "Waited for tracee "
+                "(after it called kill et al), but it doesn't exist.");
+        }
+        throw system_error(errno, generic_category(), "waitpid");
+    }
+    if (!WIFSTOPPED(status)) 
+    {
+        if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) 
+        {
+            throw BadTraceError(tracee.pid, 
+                "Expected tracee to have been SIGKILL'ed.");
+        }
+        if ((target == 0 || target == tracee.pid || target == -tracee.pid) 
+            && signal == SIGKILL) 
+        {
+            // The tracee SIGKILL'ed themselves or their own process group, so
+            // it's still a valid kill() event even though we never reached a
+            // syscall-exit-stop. (Technically it's possible for the SIGKILL to
+            // have not originated from this kill call if another process sent
+            // SIGKILL within the tiiiiny time window between the start of the
+            // kill syscall and it actually killing the process, but this is
+            // good enough for me I think). Unfortunately, PTRACE_GETSIGINFO is
+            // of no use here, since it can't track SIGKILL'ed processes. TODO
+            on_sent_signal(tracee, target, signal, toThread);
+        }
+        handle_wait_notification(tracee, status);
+        assert(tracee.state == Tracee::DEAD);
+        return;
+    }
+    if (!IS_SYSCALL_EVENT(status)) 
+    {
+        throw diagnose_bad_event(tracee, status,
+            "Expected syscall-exit-stop after kill et al.");
+    }
+    tracee.state = Tracee::STOPPED; // have to manually do this
+    tracee.syscall = SYSCALL_NONE;
+
+    size_t retval;
+    if (!get_syscall_ret(tracee.pid, retval)) {
+        expect_ended(tracee);
+        return;
+    }
+
+    if (signal == 0 || retval != 0) 
+    {
+        resume(tracee); // ignore no signal or a failed kill et al
+        return;
+    }
+    on_sent_signal(tracee, target, signal, toThread);
+}
+
 /* Handle a source location update from tracee using our fake syscall */
 void Tracer::handle_new_location(Tracee& tracee,
                                  unsigned line, 
@@ -512,6 +649,302 @@ void Tracer::handle_new_location(Tracee& tracee,
     tracee.process->update_location(std::move(location));
     resume(tracee); // continue until syscall-exit-stop
 }
+
+void Tracer::handle_syscall_entry(Tracee& tracee, 
+                                  int syscall,
+                                  size_t args[SYS_ARG_MAX])
+{
+    tracee.syscall = syscall;
+    verbose("{} entered syscall {}", tracee.pid, get_syscall_name(syscall));
+    switch (syscall) 
+    {
+        case SYSCALL_PTRACE:
+        case SYSCALL_SETPGID:
+        case SYSCALL_SETSID:
+        case SYSCALL_VFORK:
+            break; // we'll block these syscalls
+
+        case SYSCALL_FORK:
+            handle_fork(tracee);
+            return;
+
+        case SYSCALL_EXECVE:
+            handle_exec(tracee, (const char*)args[0], (const char**)args[1]);
+            return;
+
+        case SYSCALL_EXECVEAT:
+            handle_exec(tracee, (const char*)args[1], (const char**)args[2]);
+            return;
+
+        case SYSCALL_WAIT4:
+            initiate_wait(tracee, std::make_unique<Wait4Call>(
+                (pid_t)args[0],
+                (int*)args[1],
+                (int)args[2]
+            ));
+            return;
+
+        case SYSCALL_WAITID:
+            initiate_wait(tracee, std::make_unique<WaitIDCall>(
+                (idtype_t)args[0],
+                (id_t)args[1],
+                (siginfo_t*)args[2],
+                (int)args[3]
+            ));
+            return;
+
+        case SYSCALL_CLONE:
+            // TODO what if CLONE_THREAD or CLONE_PARENT is specified???
+            // Then that is very much *unlike* a fork...?!?!?!
+            if (IS_CLONE_LIKE_A_FORK(args)) 
+            {
+                handle_fork(tracee);
+                return;
+            } 
+            break; // we'll cancel the syscall
+
+        case SYSCALL_KILL: 
+            handle_kill(tracee, (pid_t)args[0], (int)args[1], false);
+            return;
+
+        case SYSCALL_TKILL:
+            handle_kill(tracee, (pid_t)args[0], (int)args[1], true);
+            return;
+
+        case SYSCALL_TGKILL:
+            handle_kill(tracee, (pid_t)args[1], (int)args[2], true);
+            return;
+
+        case SYSCALL_FAKE:
+            handle_new_location(
+                tracee,
+                (unsigned)args[0],
+                (const char*)args[1],
+                (const char*)args[2]
+            );
+            return;
+
+        default:
+            resume(tracee);
+            return;
+    }
+
+    error("Tracee {} tried to execute banned syscall {}.", 
+        tracee.pid, get_syscall_name(syscall));
+    set_syscall(tracee.pid, SYSCALL_NONE); // make the syscall fail
+    resume(tracee);
+}
+
+void Tracer::handle_syscall_exit(Tracee& tracee)
+{
+    if (tracee.blockingCall != nullptr) 
+    {
+        // we just reached the syscall-exit-stop for a blocking system
+        // call that we were trying to keep track of - so finish that.
+        if (!tracee.blockingCall->finalise(*this, tracee)) 
+        {
+            expect_ended(tracee);
+            return;
+        }
+        verbose("{} exited blocking syscall {}", 
+            tracee.pid, get_syscall_name(tracee.syscall));
+        tracee.blockingCall.reset();
+    }
+    else
+    {
+        verbose("{} exited syscall {}", 
+            tracee.pid, get_syscall_name(tracee.syscall));
+    }
+    resume(tracee);
+    tracee.syscall = SYSCALL_NONE;
+}
+
+void Tracer::handle_signal_stop(Tracee& tracee, int signal)
+{
+    if (tracee.signal != 0)
+    {
+        // TODO I don't know if this is allowed by Linux/ptrace or not
+        // I may have to be able to support a list of pending signals...
+        // I don't think this is a problem since Linux only delivers the
+        // signals when the process resumes. Will think more about this.
+        throw BadTraceError(tracee.pid, "Tracee delivered a signal when there"
+            " was already a pending signal.");
+    }
+
+    if (signal == SIGTTIN)
+    {
+        // TODO
+        throw BadTraceError(tracee.pid, "Looks like this process tried to "
+            "read from the terminal. Sorry, I don't support that (yet).");
+    }
+
+    siginfo_t info;
+    if (ptrace(PTRACE_GETSIGINFO, tracee.pid, 0, &info) == -1)
+    {
+        if (errno == ESRCH)
+        {
+            expect_ended(tracee);
+            return;
+        }
+        throw system_error(errno, generic_category(), 
+            "ptrace(PTRACE_GETSIGINFO)");
+    }
+
+    tracee.process->notify_signaled(info.si_pid, signal);
+    tracee.signal = signal; // make sure it's delivered when next resumed
+}
+
+void Tracer::handle_stopped(Tracee& tracee, int status)
+{
+    assert(WIFSTOPPED(status));
+    if (IS_SYSCALL_EVENT(status))
+    {
+        if (tracee.syscall == SYSCALL_NONE)
+        {
+            int syscall;
+            size_t args[SYS_ARG_MAX];
+            if (!which_syscall(tracee.pid, syscall, args))
+            {
+                expect_ended(tracee);
+                return;
+            }
+            handle_syscall_entry(tracee, syscall, args);
+        }
+        else
+        {
+            handle_syscall_exit(tracee); // resets to SYSCALL_NONE for us
+        }
+    }
+    else if (IS_FORK_EVENT(status) 
+        || IS_CLONE_EVENT(status) 
+        || IS_EXEC_EVENT(status)
+        || IS_EXIT_EVENT(status))
+    {
+        // These events should only be generated when handling the respective
+        // system calls. They should not be appearing now.
+        throw diagnose_bad_event(tracee, status, "Got event at weird time.");
+    }
+    else
+    {
+        handle_signal_stop(tracee, WSTOPSIG(status));
+    }
+}
+
+void Tracer::handle_wait_notification(Tracee& tracee, int status)
+{
+    if (tracee.state == Tracee::DEAD)
+    {
+        throw diagnose_bad_event(tracee, status, "Got event for dead tracee.");
+    }
+    if (WIFEXITED(status) || WIFSIGNALED(status))
+    {
+        tracee.process->notify_ended(status);
+        if (_leaders.find(tracee.pid) != _leaders.end())
+        {
+            log("leader {} ended", tracee.pid);
+            // Also, since we're the parent of this proces, this ptrace
+            // notification doubles up as us reaping it, so we can remove it.
+            _tracees.erase(tracee.pid);
+            // We don't want to reset _leader since we want to keep the PID
+            // around since it doubles up as the PGID (for easy killing), so
+            // we'll just _leader set.
+        }
+        else
+        {
+            // We don't want to erase the tracee from our list until we've been
+            // told that it was orphaned or reaped. So remember this for later.
+            tracee.state = Tracee::DEAD;
+        }
+        return;
+    }
+
+    if (!WIFSTOPPED(status))
+    {
+        throw diagnose_bad_event(tracee, status,
+            "Tracee hasn't ended but also hasn't stopped...");
+    }
+    tracee.state = Tracee::STOPPED;
+    handle_stopped(tracee, status);
+}
+
+/******************************************************************************
+ * HELPER FUNCTIONS FOR TRACING
+ *****************************************************************************/
+
+bool Tracer::wait_for_stop(Tracee& tracee, int& status)
+{
+    if (waitpid(tracee.pid, &status, 0) == -1) 
+    {
+        if (errno == ECHILD)
+        {
+            throw BadTraceError(tracee.pid, 
+                "Waited for tracee to stop but it doesn't exist.");
+        }
+        throw system_error(errno, generic_category(), "waitpid");
+    }
+    if (WIFSTOPPED(status)) 
+    {
+        tracee.state = Tracee::STOPPED;
+        return true;
+    }
+    handle_wait_notification(tracee, status);
+    return false;
+}
+
+bool Tracer::resume(Tracee& tracee)
+{
+    if (tracee.state != Tracee::STOPPED)
+    {
+        debug("{} not stopped, so not resuming it.", tracee.pid);
+        return true; // TODO why would this happen? Should it happen?
+    }
+    bool ok = resume_tracee(tracee.pid, tracee.signal);
+    if (!ok)
+    {
+        debug("resume_tracee({}) failed", tracee.pid);
+    }
+    else
+    {
+        debug("resumed tracee {}", tracee.pid);
+    }
+    tracee.signal = 0;
+    tracee.state = Tracee::RUNNING;
+    return ok;
+}
+
+
+/* Calls waitpid on the tracee and makes sure that it's either exited or been
+ * killed, then handles the exit/kill event with handle_wait_notification. 
+ * If the tracee hasn't ended, then a BadTraceError is thrown. */
+void Tracer::expect_ended(Tracee& tracee)
+{
+    // TODO maybe use WNOHANG? Maybe loop until we get an exit event in case
+    // multiple were queued up (is that even possible?). Grrr so much of this
+    // depends on me know the precise behaviour of Linux and sometimes the only
+    // solution is to either test it or read the source code.
+    int status;
+    if (waitpid(tracee.pid, &status, 0) == -1)
+    {
+        if (errno == ECHILD)
+        {
+            throw BadTraceError(tracee.pid, 
+                "Expected tracee to have ended but it doesn't exist.");
+        }
+        throw system_error(errno, generic_category(), "waitpid");
+    }
+    if (!WIFEXITED(status) && !WIFSIGNALED(status))
+    {
+        throw diagnose_bad_event(tracee, status,
+            "Expected tracee to have ended, but it hasn't.");
+    }
+
+    // this will handle the event for us and set tracee's state to DEAD
+    handle_wait_notification(tracee, status);
+}
+
+/******************************************************************************
+ * OTHER METHODS
+ *****************************************************************************/
 
 void Tracer::collect_orphans() 
 {
@@ -602,288 +1035,11 @@ bool Tracer::are_tracees_running() const
     return false;
 }
 
-bool Tracer::wait_for_stop(Tracee& tracee, int& status)
-{
-    if (waitpid(tracee.pid, &status, 0) == -1) 
-    {
-        if (errno == ECHILD)
-        {
-            throw BadTraceError(tracee.pid, 
-                "Waited for tracee to stop but it doesn't exist.");
-        }
-        throw system_error(errno, generic_category(), "waitpid");
-    }
-    if (WIFSTOPPED(status)) 
-    {
-        tracee.state = Tracee::STOPPED;
-        return true;
-    }
-    handle_wait_notification(tracee, status);
-    return false;
-}
-
-bool Tracer::resume(Tracee& tracee)
-{
-    if (tracee.state != Tracee::STOPPED)
-    {
-        debug("{} not stopped, so not resuming it.", tracee.pid);
-        return true; // TODO why would this happen? Should it happen?
-    }
-    bool ok = resume_tracee(tracee.pid, tracee.signal);
-    if (!ok)
-    {
-        debug("resume_tracee({}) failed", tracee.pid);
-    }
-    else
-    {
-        debug("resumed tracee {}", tracee.pid);
-    }
-    tracee.signal = 0;
-    tracee.state = Tracee::RUNNING;
-    return ok;
-}
-
-void Tracer::handle_syscall_entry(Tracee& tracee, 
-                                  int syscall,
-                                  size_t args[SYS_ARG_MAX])
-{
-    tracee.syscall = syscall;
-    verbose("{} entered syscall {}", tracee.pid, get_syscall_name(syscall));
-    switch (syscall) 
-    {
-        case SYSCALL_PTRACE:
-        case SYSCALL_SETPGID:
-        case SYSCALL_SETSID:
-        case SYSCALL_VFORK:
-            break; // we'll block these syscalls
-
-        case SYSCALL_FORK:
-            handle_fork(tracee);
-            return;
-
-        case SYSCALL_EXECVE:
-            handle_exec(tracee, (const char*)args[0], (const char**)args[1]);
-            return;
-
-        case SYSCALL_EXECVEAT:
-            handle_exec(tracee, (const char*)args[1], (const char**)args[2]);
-            return;
-
-        case SYSCALL_WAIT4:
-            initiate_wait(tracee, std::make_unique<Wait4Call>(
-                (pid_t)args[0],
-                (int*)args[1],
-                (int)args[2]
-            ));
-            return;
-
-        case SYSCALL_WAITID:
-            initiate_wait(tracee, std::make_unique<WaitIDCall>(
-                (idtype_t)args[0],
-                (id_t)args[1],
-                (siginfo_t*)args[2],
-                (int)args[3]
-            ));
-            return;
-
-        case SYSCALL_CLONE:
-            // TODO what if CLONE_THREAD or CLONE_PARENT is specified???
-            // Then that is very much *unlike* a fork...?!?!?!
-            if (IS_CLONE_LIKE_A_FORK(args)) 
-            {
-                handle_fork(tracee);
-                return;
-            } 
-            break; // we'll cancel the syscall
-
-        case SYSCALL_FAKE:
-            handle_new_location(
-                tracee,
-                (unsigned)args[0],
-                (const char*)args[1],
-                (const char*)args[2]
-            );
-            return;
-
-        case SYSCALL_KILL: // TODO implement these
-        case SYSCALL_TKILL:
-        case SYSCALL_TGKILL:
-        default:
-            resume(tracee);
-            return;
-    }
-
-    error("Tracee {} tried to execute banned syscall {}.", 
-        tracee.pid, get_syscall_name(syscall));
-    set_syscall(tracee.pid, SYSCALL_NONE); // make the syscall fail
-    resume(tracee);
-}
-
-void Tracer::handle_syscall_exit(Tracee& tracee)
-{
-    if (tracee.blockingCall != nullptr) 
-    {
-        // we just reached the syscall-exit-stop for a blocking system
-        // call that we were trying to keep track of - so finish that.
-        if (!tracee.blockingCall->finalise(*this, tracee)) 
-        {
-            expect_ended(tracee);
-            return;
-        }
-        verbose("{} exited blocking syscall {}", 
-            tracee.pid, get_syscall_name(tracee.syscall));
-        tracee.blockingCall.reset();
-    }
-    else
-    {
-        verbose("{} exited syscall {}", 
-            tracee.pid, get_syscall_name(tracee.syscall));
-    }
-    resume(tracee);
-    tracee.syscall = SYSCALL_NONE;
-}
-
-void Tracer::handle_signal_stop(Tracee& tracee, int signal)
-{
-    if (tracee.signal != 0)
-    {
-        // TODO I don't know if this is allowed by Linux/ptrace or not
-        // I may have to be able to support a list of pending signals...
-        // I don't think this is a problem since Linux only delivers the
-        // signals when the process resumes. Will think more about this.
-        throw BadTraceError(tracee.pid, "Tracee delivered a signal when there"
-            " was already a pending signal.");
-    }
-
-    if (signal == SIGTTIN)
-    {
-        // TODO
-        throw BadTraceError(tracee.pid, "Looks like this process tried to "
-            "read frmo the terminal. Sorry, I don't support that (yet).");
-    }
-
-    siginfo_t info;
-    if (ptrace(PTRACE_GETSIGINFO, tracee.pid, 0, &info) == -1)
-    {
-        if (errno == ESRCH)
-        {
-            expect_ended(tracee);
-            return;
-        }
-        throw system_error(errno, generic_category(), 
-            "ptrace(PTRACE_GETSIGINFO)");
-    }
-
-    tracee.process->notify_signaled(info.si_pid, signal);
-    tracee.signal = signal; // make sure it's delivered when next resumed
-}
-
-/* Calls waitpid on the tracee and makes sure that it's either exited or been
- * killed, then handles the exit/kill event with handle_wait_notification. 
- * If the tracee hasn't ended, then a BadTraceError is thrown. */
-void Tracer::expect_ended(Tracee& tracee)
-{
-    // TODO maybe use WNOHANG? Maybe loop until we get an exit event in case
-    // multiple were queued up (is that even possible?). Grrr so much of this
-    // depends on me know the precise behaviour of Linux and sometimes the only
-    // solution is to either test it or read the source code.
-    int status;
-    if (waitpid(tracee.pid, &status, 0) == -1)
-    {
-        if (errno == ECHILD)
-        {
-            throw BadTraceError(tracee.pid, 
-                "Expected tracee to have ended but it doesn't exist.");
-        }
-        throw system_error(errno, generic_category(), "waitpid");
-    }
-    if (!WIFEXITED(status) && !WIFSIGNALED(status))
-    {
-        throw diagnose_bad_event(tracee, status,
-            "Expected tracee to have ended, but it hasn't.");
-    }
-
-    // this will handle the event for us and set tracee's state to DEAD
-    handle_wait_notification(tracee, status);
-}
-
-void Tracer::handle_stopped(Tracee& tracee, int status)
-{
-    assert(WIFSTOPPED(status));
-    if (IS_SYSCALL_EVENT(status))
-    {
-        if (tracee.syscall == SYSCALL_NONE)
-        {
-            int syscall;
-            size_t args[SYS_ARG_MAX];
-            if (!which_syscall(tracee.pid, syscall, args))
-            {
-                expect_ended(tracee);
-                return;
-            }
-            handle_syscall_entry(tracee, syscall, args);
-        }
-        else
-        {
-            handle_syscall_exit(tracee); // resets to SYSCALL_NONE for us
-        }
-    }
-    else if (IS_FORK_EVENT(status) 
-        || IS_CLONE_EVENT(status) 
-        || IS_EXEC_EVENT(status)
-        || IS_EXIT_EVENT(status))
-    {
-        // These events should only be generated when handling the respective
-        // system calls. They should not be appearing now.
-        throw diagnose_bad_event(tracee, status, "Got event at weird time.");
-    }
-    else
-    {
-        handle_signal_stop(tracee, WSTOPSIG(status));
-    }
-}
-
-void Tracer::handle_wait_notification(Tracee& tracee, int status)
-{
-    if (tracee.state == Tracee::DEAD)
-    {
-        throw diagnose_bad_event(tracee, status, "Got event for dead tracee.");
-    }
-    if (WIFEXITED(status) || WIFSIGNALED(status))
-    {
-        tracee.process->notify_ended(status);
-        if (_leaders.find(tracee.pid) != _leaders.end())
-        {
-            log("leader {} ended", tracee.pid);
-            // Also, since we're the parent of this proces, this ptrace
-            // notification doubles up as us reaping it, so we can remove it.
-            _tracees.erase(tracee.pid);
-            // We don't want to reset _leader since we want to keep the PID
-            // around since it doubles up as the PGID (for easy killing), so
-            // we'll just _leader set.
-        }
-        else
-        {
-            // We don't want to erase the tracee from our list until we've been
-            // told that it was orphaned or reaped. So remember this for later.
-            tracee.state = Tracee::DEAD;
-        }
-        return;
-    }
-
-    if (!WIFSTOPPED(status))
-    {
-        throw diagnose_bad_event(tracee, status,
-            "Tracee hasn't ended but also hasn't stopped...");
-    }
-    tracee.state = Tracee::STOPPED;
-    handle_stopped(tracee, status);
-}
-
 Tracee& Tracer::add_tracee(pid_t pid, shared_ptr<Process> process)
 {
-    auto it = _tracees.find(pid);
-    if (it != _tracees.end())
+    // Emplace returns iterator to item and good=false if key already used
+    auto [it, good] = _tracees.emplace(pid, Tracee(pid, std::move(process)));
+    if (!good)
     {
         // We got a new tracee with the same PID as an existing tracee. This is
         // possible if the old tracee was orphaned and the reaper reaped it,
@@ -892,7 +1048,7 @@ Tracee& Tracer::add_tracee(pid_t pid, shared_ptr<Process> process)
         _tracees.erase(it); // it ded
         _recycledPIDs.push_back(pid);
     }
-    return (_tracees[pid] = Tracee(pid, std::move(process)));
+    return it->second;
 }
 
 bool Tracer::step() 
