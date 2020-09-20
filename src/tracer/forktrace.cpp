@@ -230,6 +230,10 @@ void do_tree(const vector<shared_ptr<Process>>& trees, vector<string> args)
     }
     if (args.empty())
     {
+        if (trees.empty())
+        {
+            std::cerr << "There are no process trees yet.\n";
+        }
         for (size_t i = 0; i < trees.size(); ++i)
         {
             std::cerr << format(fmt::emphasis::bold, "Process tree {}:\n", i);
@@ -241,7 +245,7 @@ void do_tree(const vector<shared_ptr<Process>>& trees, vector<string> args)
         size_t i = parse_number<size_t>(args[0]);
         if (i >= trees.size())
         {
-            throw std::runtime_error("Invalid process tree index.");
+            throw std::runtime_error("Out-of-bounds process tree index.");
         }
         trees[i]->print_tree();
     }
@@ -289,7 +293,8 @@ static void register_commands(CommandParser& parser,
             trees.push_back(do_start(tracer, std::move(args))); 
         }
     );
-    parser.add("tree", "[TREE]", "debug output for a process tree (or all)",
+    parser.add("tree", "[TREE]", 
+        "debug output for a process tree, or all if none specified",
         [&](vector<string> args) { do_tree(trees, std::move(args)); }
     );
     parser.add("trees", "", "print a list of all the process trees",
@@ -298,7 +303,7 @@ static void register_commands(CommandParser& parser,
     parser.add("run", "PROGRAM [ARGS...]", "same as start & resume",
         [&](vector<string> args) { 
             trees.push_back(do_start(tracer, std::move(args))); 
-            tracer.step(); 
+            while (tracer.step()) { }
         }
     );
     parser.add("next", "", "resume all tracees until they stop again",
