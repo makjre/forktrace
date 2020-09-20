@@ -22,6 +22,7 @@ using std::string_view;
 using std::vector;
 using std::function;
 using std::optional;
+using fmt::format;
 
 /* Will install this SIGINT handler when reading a line so that pressing Ctrl+C
  * will cancel the current line. Idk if this is what you're supposed to do...*/
@@ -174,11 +175,10 @@ void CommandParser::help_handler(vector<string> args) const
         const Command* command = find_command(args[0]);
         if (!command)
         {
-            error("The '{}' command does not exist. Try 'help'.", args[0]);
-            return;
+            return; // find_command prints an error for us
         }
-        string cmd = command->name + ' ' + command->params;
-        std::cerr << colour(Colour::BOLD, cmd) << '\n';
+        string cmd = colour(Colour::BOLD, command->name);
+        std::cerr << format("{} {}\n", cmd, command->params);
         std::cerr << wrap_text_to_screen(command->help, false, 0);
         return;
     }
