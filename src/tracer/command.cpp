@@ -369,7 +369,8 @@ static bool extract_string(string_view& line, string& token)
     line.remove_prefix(1); // skip the delimiter
     token.clear();
 
-    for (;;) {
+    for (;;) 
+    {
         while (!line.empty() && line[0] != delim && line[0] != '\\')
         {
             token += line[0];
@@ -405,7 +406,8 @@ static bool extract_string(string_view& line, string& token)
 static vector<string> tokenise(string_view line)
 {
     vector<string> tokens;
-    for (;;) {
+    for (;;) 
+    {
         // Skip whitespace
         while (!line.empty() && isspace(line[0]))
         {
