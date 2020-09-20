@@ -168,6 +168,11 @@ void Drawer::backtrack(size_t steps)
 
 void Drawer::draw_char(Colour c, char ch, size_t count) 
 {
+    if (_x >= _win->width())
+    {
+        _truncated = true;
+        return;
+    }
     c = _win->set_colour(c);
     _win->draw_char(_x, _y, ch, count);
     _win->set_colour(c);
