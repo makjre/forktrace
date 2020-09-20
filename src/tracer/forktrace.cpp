@@ -552,17 +552,17 @@ static void register_commands(CommandParser& parser,
     parser.add("lane-width", "WIDTH", "set the diagram lane width",
         [&](string s) { opts.laneWidth = parse_number<size_t>(s); }
     );
-    parser.add("hide-non-fatal", "yes|no", "hide or show non-fatal signals",
-        [&](string s) { opts.hideNonFatalSignals = parse_bool(s); }
+    parser.add("show-non-fatal", "yes|no", "hide or show non-fatal signals",
+        [&](string s) { opts.hideNonFatalSignals = !parse_bool(s); }
     );
-    parser.add("hide-execs", "yes|no", "hide or show successful execs",
-        [&](string s) { opts.hideExecs = parse_bool(s); }
+    parser.add("show-execs", "yes|no", "hide or show successful execs",
+        [&](string s) { opts.hideExecs = !parse_bool(s); }
     );
-    parser.add("hide-bad-execs", "yes|no", "hide or show failed execs",
-        [&](string s) { opts.hideFailedExecs = parse_bool(s); }
+    parser.add("show-bad-execs", "yes|no", "hide or show failed execs",
+        [&](string s) { opts.hideFailedExecs = !parse_bool(s); }
     );
-    parser.add("hide-signal-sends", "yes|no", "hide or show signal sends",
-        [&](string s) { opts.hideSignalSends = parse_bool(s); }
+    parser.add("show-signal-sends", "yes|no", "hide or show signal sends",
+        [&](string s) { opts.hideSignalSends = !parse_bool(s); }
     );
 
     // Other
