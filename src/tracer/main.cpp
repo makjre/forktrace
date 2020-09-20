@@ -750,7 +750,7 @@ static void print_syscall(int syscall)
 }
 
 /* Registers all of our command line options with the argparser. */
-static void register_options(ArgParser& parser, ForktraceOpts& opts)
+static void register_options(ArgParser& parser, Forktrace::Options& opts)
 {
     parser.add("no-colour", 'c', "", "disables colours", 
         []{ set_colour_enabled(false); }
@@ -808,7 +808,7 @@ static bool do_all_the_things(int argc, const char** argv)
         return false;
     }
 
-    ForktraceOpts opts;
+    Forktrace::Options opts;
     ArgParser parser;
     register_options(parser, opts);
 

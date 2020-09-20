@@ -48,10 +48,10 @@ static volatile std::atomic<bool> gDone = false;
 
 static void signal_handler(int sig, siginfo_t* info, void* ucontext) 
 {
-    //restoreTerminal();
-    // TODO info.si_pid seems bonkers
-    string msg = format("tracer ({}) got {} {{info.si_pid={}}}\n",
-        getpid(), get_signal_name(sig), info->si_pid);
+    restore_terminal();
+    // TODO info.si_pid seems bonkers??
+    string msg = format("{} ({}) got {} {{info.si_pid={}}}\n",
+        program_name(), getpid(), get_signal_name(sig), info->si_pid);
     write(STDERR_FILENO, msg.data(), msg.size());
     _exit(1);
 }
@@ -231,17 +231,7 @@ static void join_reaper(std::thread& reaper, FILE* reaperPipe)
  * COMMANDS
  *****************************************************************************/
 
-static shared_ptr<Process> do_start(Tracer& tracer, vector<string> args)
-{
-    if (args.empty())
-    {
-        throw runtime_error("Expected: PROGRAM [ARGS...]");
-    }
-    return tracer.start(args[0], args);
-}
-
-static void do_tree(const vector<shared_ptr<Process>>& trees, 
-                    vector<string> args)
+static void do_tree(Forktrace& ft, vector<string> args)
 {
     if (args.size() > 1)
     {
@@ -249,46 +239,37 @@ static void do_tree(const vector<shared_ptr<Process>>& trees,
     }
     if (args.empty())
     {
-        if (trees.empty())
+        if (ft.trees.empty())
         {
             std::cerr << "There are no process trees yet.\n";
         }
-        for (size_t i = 0; i < trees.size(); ++i)
+        for (size_t i = 0; i < ft.trees.size(); ++i)
         {
             std::cerr << colour(Colour::BOLD, format("Process tree {}:\n", i));
-            trees[i]->print_tree();
+            ft.trees[i]->print_tree();
         }
     }
     else
     {
         size_t i = parse_number<size_t>(args[0]);
-        if (i >= trees.size())
+        if (i >= ft.trees.size())
         {
             throw runtime_error("Out-of-bounds process tree index.");
         }
-        trees[i]->print_tree();
+        ft.trees[i]->print_tree();
     }
 }
 
-static void do_trees(const vector<shared_ptr<Process>>& trees)
+static void do_trees(Forktrace& ft)
 {
-    if (trees.empty())
+    if (ft.trees.empty())
     {
         std::cerr << "There are no process trees yet.\n";
     }
-    for (size_t i = 0; i < trees.size(); ++i)
+    for (size_t i = 0; i < ft.trees.size(); ++i)
     {
-        std::cerr << format("{}: {}\n", i, trees[i]->to_string());
+        std::cerr << format("{}: {}\n", i, ft.trees[i]->to_string());
     }
-}
-
-static void do_march(Tracer& tracer)
-{
-    if (!tracer.tracees_alive())
-    {
-        std::cerr << "There are no active tracees.\n";
-    }
-    tracer.step();
 }
 
 /* Callback for do_draw() to draw to the terminal */
@@ -428,32 +409,32 @@ static void draw_or_view(const Diagram& diagram)
     }
 }
 
-static void draw_tree(const Process& tree, 
-                      const ForktraceOpts& opts,
+static void draw_tree(Forktrace& ft, 
+                      size_t treeIndex, 
                       function<void(const Diagram&)> drawer)
 {
     int flags = 0;
-    if (opts.showNonFatalSignals)
+    if (ft.opts.showNonFatalSignals)
     {
         flags |= Diagram::SHOW_NON_FATAL_SIGNALS;
     }
-    if (opts.showExecs)
+    if (ft.opts.showExecs)
     {
         flags |= Diagram::SHOW_EXECS;
     }
-    if (opts.showFailedExecs)
+    if (ft.opts.showFailedExecs)
     {
         flags |= Diagram::SHOW_FAILED_EXECS;
     }
-    if (opts.showSignalSends)
+    if (ft.opts.showSignalSends)
     {
         flags |= Diagram::SHOW_SIGNAL_SENDS;
     }
-    if (opts.mergeExecs)
+    if (ft.opts.mergeExecs)
     {
         flags |= Diagram::MERGE_EXECS;
     }
-    Diagram diagram(tree, opts.laneWidth, flags);
+    Diagram diagram(*ft.trees.at(treeIndex).get(), ft.opts.laneWidth, flags);
     drawer(diagram);
     if (diagram.truncated())
     {
@@ -461,21 +442,20 @@ static void draw_tree(const Process& tree,
     }
 }
 
-static void do_draw(vector<shared_ptr<Process>>& trees, 
-                    const ForktraceOpts& opts,
+static void do_draw(Forktrace& ft, 
                     vector<string> args,
                     function<void(const Diagram&)> drawer)
 {
     if (args.empty())
     {
-        if (trees.empty())
+        if (ft.trees.empty())
         {
             std::cerr << "There are no process trees yet.\n";
         }
-        for (size_t i = 0; i < trees.size(); ++i)
+        for (size_t i = 0; i < ft.trees.size(); ++i)
         {
             std::cerr << colour(Colour::BOLD, format("Process tree {}:\n", i));
-            draw_tree(*trees[i].get(), opts, drawer);
+            draw_tree(ft, i, drawer);
         }
     }
     else if (args.size() > 1)
@@ -485,35 +465,69 @@ static void do_draw(vector<shared_ptr<Process>>& trees,
     else
     {
         size_t i = parse_number<size_t>(args[0]);
-        if (i >= trees.size())
+        if (i >= ft.trees.size())
         {
             throw runtime_error("Out-of-bounds process tree index.");
         }
-        draw_tree(*trees[i].get(), opts, drawer);
+        draw_tree(ft, i, drawer);
     }
 }
 
-static void do_go(Tracer& tracer, const ForktraceOpts& opts)
+static void do_start(Forktrace& ft, vector<string> args)
 {
-    while (tracer.step())
+    if (args.empty())
+    {
+        throw runtime_error("Expected: PROGRAM [ARGS...]");
+    }
+    ft.trees.push_back(ft.tracer.start(args[0], args));
+}
+
+static void do_go(Forktrace& ft)
+{
+    while (ft.tracer.step())
     {
         // step() will return false when there are no tracees left, however,
         // if the reaper process is disabled, then we will never be able to
         // clear the list of tracees, so we'll loosen the condition to stop
         // step()ing to be that there can be no alive tracees left (instead of
         // the stronger condition of no tracees at all).
-        if (!opts.reaper && !tracer.tracees_alive())
+        if (!ft.opts.reaper && !ft.tracer.tracees_alive())
         {
             return;
         }
     }
 }
 
-static void register_commands(CommandParser& parser,
-                              Tracer& tracer,
-                              ForktraceOpts& opts,
-                              vector<shared_ptr<Process>>& trees)
+static void do_run(Forktrace& ft, vector<string> args)
 {
+    do_start(ft, std::move(args));
+    do_go(ft);
+}
+
+static void do_march(Forktrace& ft)
+{
+    if (!ft.tracer.tracees_exist())
+    {
+        std::cerr << "There are no active tracees.\n";
+    }
+    ft.tracer.step();
+}
+
+static void do_next(Forktrace& ft)
+{
+    if (!ft.tracer.tracees_exist())
+    {
+        std::cerr << "There are no active tracees.\n";
+        return;
+    }
+    ft.tracer.step();
+    do_draw(ft, {}, draw);
+}
+
+static void register_commands(Forktrace& ft)
+{
+    CommandParser& parser = ft.parser;
+
     // General config
     parser.add("colour", "ENABLED", "enable/disable colour",
         [](string s) { set_colour_enabled(parse_bool(s)); }
@@ -527,69 +541,64 @@ static void register_commands(CommandParser& parser,
 
     // Viewing the process tree
     parser.add("list", "", "print a list of all tracees",
-        [&] { tracer.print_list(); }
+        [&] { ft.tracer.print_list(); }
     );
     parser.add("tree", "[TREE]", 
         "debug output for a process tree, or all if none specified",
-        [&](vector<string> args) { do_tree(trees, std::move(args)); }
+        [&](vector<string> args) { do_tree(ft, std::move(args)); }
     );
     parser.add("trees", "", "print a list of all the process trees",
-        [&] { do_trees(trees); }
+        [&] { do_trees(ft); }
     );
     parser.add("draw", "[TREE]", 
         "draw a process tree, or all if none specified",
         [&](vector<string> args) { 
-            do_draw(trees, opts, std::move(args), draw); 
+            do_draw(ft, std::move(args), draw); 
         }
     );
     parser.add("view", "[TREE]",
         "view a process tree in a scrollable window (defaults to tree 0)",
         [&](vector<string> args) { 
-            do_draw(trees, opts, std::move(args), view); 
+            do_draw(ft, std::move(args), view); 
         }
     );
 
     // Starting/stopping/etc.
     parser.add("start", "PROGRAM [ARGS...]", "start a tracee program",
-        [&](vector<string> args) { 
-            trees.push_back(do_start(tracer, std::move(args))); 
-        }
+        [&](vector<string> args) { do_start(ft, std::move(args)); }
     );
     parser.add("run", "PROGRAM [ARGS...]", "same as start & go",
-        [&](vector<string> args) { 
-            trees.push_back(do_start(tracer, std::move(args))); 
-            do_go(tracer, opts);
-        }
+        [&](vector<string> args) { do_run(ft, std::move(args)); }
     );
     parser.add("march", "", "resume all tracees until they stop again",
-        [&] { do_march(tracer); }, true
+        [&] { do_march(ft); }, true
     );
     parser.add("next", "", "equivalent to \"march\" followed by \"draw\"",
-        [&] { do_march(tracer); do_draw(trees, opts, {}, draw); }, true
+        [&] { do_next(ft); }, true
     );
     parser.add("go", "", "resumes all tracees until until they end",
-        [&] { do_go(tracer, opts); }
+        [&] { do_go(ft); }
     );
 
     // Diagram config options
     parser.add("lane-width", "WIDTH", "set the diagram lane width",
-        [&](string s) { opts.laneWidth = parse_number<size_t>(s); }
+        [&](string s) { ft.opts.laneWidth = parse_number<size_t>(s); }
     );
     parser.add("show-non-fatal", "yes|no", "hide or show non-fatal signals",
-        [&](string s) { opts.showNonFatalSignals = parse_bool(s); }
+        [&](string s) { ft.opts.showNonFatalSignals = parse_bool(s); }
     );
     parser.add("show-execs", "yes|no", "hide or show successful execs",
-        [&](string s) { opts.showExecs = parse_bool(s); }
+        [&](string s) { ft.opts.showExecs = parse_bool(s); }
     );
     parser.add("show-bad-execs", "yes|no", "hide or show failed execs",
-        [&](string s) { opts.showFailedExecs = parse_bool(s); }
+        [&](string s) { ft.opts.showFailedExecs = parse_bool(s); }
     );
     parser.add("show-signal-sends", "yes|no", "hide or show signal sends",
-        [&](string s) { opts.showSignalSends = parse_bool(s); }
+        [&](string s) { ft.opts.showSignalSends = parse_bool(s); }
     );
     parser.add("merge-execs", "yes|no", 
         "if true, merge retried execs of the same program",
-        [&](string s) { opts.mergeExecs = parse_bool(s); }
+        [&](string s) { ft.opts.mergeExecs = parse_bool(s); }
     );
 
     // Other
@@ -602,9 +611,9 @@ static void register_commands(CommandParser& parser,
  * MAIN COMMAND LOOP, ETC.
  *****************************************************************************/
 
-static bool confirm_quit(Tracer& tracer, bool dueToEOF)
+static bool confirm_quit(Forktrace& ft, bool dueToEOF)
 {
-    if (!tracer.tracees_alive())
+    if (!ft.tracer.tracees_alive())
     {
         if (dueToEOF)
         {
@@ -627,24 +636,24 @@ static bool confirm_quit(Tracer& tracer, bool dueToEOF)
     return false;
 }
 
-static void command_line(CommandParser& cmdline, Tracer& tracer)
+static void command_line(Forktrace& ft)
 {
     while (true)
     {
         try
         {
-            while (cmdline.do_command("(ft) ")) 
+            while (ft.parser.do_command("(ft) ")) 
             { 
-                tracer.check_orphans(); // see header comment
+                ft.tracer.check_orphans(); // see header comment
             }
-            if (confirm_quit(tracer, true))
+            if (confirm_quit(ft, true))
             {
                 return;
             }
         }
         catch (const QuitCommandLoop& e)
         {
-            if (confirm_quit(tracer, false))
+            if (confirm_quit(ft, false))
             {
                 return;
             }
@@ -652,15 +661,19 @@ static void command_line(CommandParser& cmdline, Tracer& tracer)
     }
 }
 
-static bool run(Tracer& tracer, ForktraceOpts& opts, vector<string> command)
+static bool run(Tracer& tracer, Forktrace::Options& opts, vector<string> command)
 {
     vector<shared_ptr<Process>> trees; // root of each process tree
     CommandParser cmdline;
-    register_commands(cmdline, tracer, opts, trees);
+
+    // Bundles up references to all the state so others can access it
+    Forktrace ft(opts, tracer, cmdline, trees);
+    register_commands(ft);
+
     if (command.empty())
     {
         verbose("No command provided. Going into command line mode.");
-        command_line(cmdline, tracer);
+        command_line(ft);
     }
     else
     {
@@ -669,14 +682,14 @@ static bool run(Tracer& tracer, ForktraceOpts& opts, vector<string> command)
         {
             assert(!command.empty());
             trees.push_back(tracer.start(command[0], command));
-            do_go(tracer, opts);
+            do_go(ft);
             if (opts.forceScrollView)
             {
-                do_draw(trees, opts, {}, view);
+                do_draw(ft, {}, view);
             }
             else
             {
-                do_draw(trees, opts, {}, draw_or_view);
+                do_draw(ft, {}, draw_or_view);
             }
         }
         catch (const std::exception& e)
@@ -692,9 +705,9 @@ static bool run(Tracer& tracer, ForktraceOpts& opts, vector<string> command)
  * all of the parsing of the command-line options. If !command.empty(), then we
  * run the specified command in forktrace from start to finish. Otherwise, we
  * go into our command line mode. */
-bool forktrace(vector<string> command, ForktraceOpts opts)
+bool forktrace(vector<string> command, Forktrace::Options opts)
 {
-    //atexit(restore_terminal);
+    atexit(restore_terminal);
     register_signals();
 
     /* Block SIGINT so it doesn't kill us (we want to sigwait it). We need to

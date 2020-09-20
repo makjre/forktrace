@@ -130,6 +130,7 @@ private:
     void cleanup();
 
 public:
+    /* The constructor brings up the curses view. */
     ScrollView(const Window& window, 
                std::string_view helpMessage, 
                KeyCallback onKey);
@@ -146,7 +147,7 @@ public:
     void quit() { _running = false; }   // Call from within onKeyPress handler.
     void beep();                        // Get terminal to make a beep noise.
     void update(const Window& window);  // Change the stuff being displayed.
-    void run();                         // Brings up the view.
+    void run();                         // Starts drawing and does command loop
 };
 
 /* Reverse any modifications that might have been done on the terminal. This 

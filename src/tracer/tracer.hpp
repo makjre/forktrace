@@ -180,6 +180,9 @@ public:
 
     /* Return true if any tracees are still alive (zombies aren't counted). */
     bool tracees_alive() const;
+
+    /* Return true if any tracees still exist (zombies are counted). */
+    bool tracees_exist() const { return !_tracees.empty(); }
 };
 
 #endif /* FORKTRACE_TRACER_HPP */

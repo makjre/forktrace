@@ -360,11 +360,11 @@ ScrollView::ScrollView(const Window& image,
     : _pad(nullptr), _padWidth(0), _padHeight(0), _cursorX(0), _cursorY(0), 
     _running(true), _helpMessage(helpMessage), _keyHandler(onKey)
 {
-    initscr();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-
+    if (!initscr() || cbreak() == ERR || noecho() == ERR 
+        || keypad(stdscr, TRUE) == ERR)
+    {
+        throw runtime_error("Failed to initialise curses window.");
+    }
     if (!init_curses_colour()) 
     {
         cleanup();
