@@ -9,11 +9,11 @@
  *      PTRACE_PEEKDATA and PTRACE_POKEDATA options although there are nicer
  *      (more complicated) methods that would avoid as much context switching.
  */
-#include <system_error>
 #include <cassert> // TODO don't need
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <sys/reg.h>
@@ -25,9 +25,7 @@
 using std::string;
 using std::string_view;
 using std::vector;
-using std::system_error;
 using std::runtime_error;
-using std::generic_category;
 
 constexpr size_t WORD_SIZE = sizeof(size_t); // shrug
 
@@ -63,8 +61,7 @@ bool get_syscall_ret(pid_t pid, size_t& retval)
     }
     if (errno != 0) 
     {
-        throw system_error(errno, generic_category(), 
-            "ptrace(PTRACE_PEEKUSER)");
+        throw SystemError(errno, "ptrace(PTRACE_PEEKUSER)");
     }
     retval = val;
     return true;
@@ -79,8 +76,7 @@ bool set_syscall(pid_t pid, int syscall)
         {
             return false;
         }
-        throw system_error(errno, generic_category(), 
-            "ptrace(PTRACE_POKEUSER)");
+        throw SystemError(errno, "ptrace(PTRACE_POKEUSER)");
     }
     return true;
 }
@@ -94,8 +90,7 @@ bool which_syscall(pid_t pid, int& syscall, size_t args[SYS_ARG_MAX])
         {
             return false;
         }
-        throw system_error(errno, generic_category(), 
-            "ptrace(PTRACE_GETREGS)");
+        throw SystemError(errno, "ptrace(PTRACE_GETREGS)");
     }
     syscall = regs.orig_rax;
     if (args != nullptr) 
@@ -133,8 +128,7 @@ bool set_syscall_arg(pid_t pid, size_t val, int argIndex)
         {
             return false;
         }
-        throw system_error(errno, generic_category(), 
-            "ptrace(PTRACE_POKEUSER)");
+        throw SystemError(errno, "ptrace(PTRACE_POKEUSER)");
     }
     return true;
 }
@@ -155,8 +149,7 @@ bool get_tracee_result_addr(pid_t pid, void*& result)
     }
     if (errno != 0) 
     {
-        throw system_error(errno, generic_category(), 
-            "ptrace(PTRACE_PEEKUSER)");
+        throw SystemError(errno, "ptrace(PTRACE_PEEKUSER)");
     }
     return true;
 }
@@ -233,14 +226,14 @@ static void setup_child(string_view program, vector<string> argv)
 
 /* Kill the specified PID with SIGKILL and reap it so that it's not a zombie.
  * If the PID is not our child, then this function fails silently. If some
- * other error occurs, then a system_error is thrown. PRESERVES ERRNO!!!!. */
+ * other error occurs, then a SystemError is thrown. PRESERVES ERRNO!!!!. */
 static void kill_and_reap(pid_t pid) 
 {
     int e = errno;
 
     if (kill(pid, SIGKILL) == -1 && errno != ESRCH) 
     {
-        throw system_error(errno, generic_category(), "kill");
+        throw SystemError(errno, "kill");
     }
     
     // Just keep looping until process disappears (causing waitpid to fail).
@@ -258,7 +251,7 @@ static void throw_failed_start(pid_t pid, int status, string_view name)
     if (WIFEXITED(status)) 
     {
         int errnoVal = exit_status_to_errno(WEXITSTATUS(status));
-        throw system_error(errnoVal, generic_category(), string(name));
+        throw SystemError(errnoVal, name);
     }
     if (WIFSIGNALED(status)) 
     {
@@ -280,7 +273,7 @@ pid_t start_tracee(string_view program, vector<string> argv)
     pid_t pid = fork();
     if (pid < 0)
     {
-        throw system_error(errno, generic_category(), "fork");
+        throw SystemError(errno, "fork");
     }
     if (pid == 0)
     {
@@ -293,7 +286,7 @@ pid_t start_tracee(string_view program, vector<string> argv)
     int status;
     if (waitpid(pid, &status, 0) == -1)
     {
-        throw system_error(errno, generic_category(), "waitpid");
+        throw SystemError(errno, "waitpid");
     }
     if (!WIFSTOPPED(status) || WSTOPSIG(status) != SIGSTOP)
     {
@@ -303,7 +296,7 @@ pid_t start_tracee(string_view program, vector<string> argv)
     if (ptrace(PTRACE_CONT, pid, 0, 0) == -1)
     {
         kill_and_reap(pid); // preserves errno for us
-        throw system_error(errno, generic_category(), "ptrace(PTRACE_CONT)");
+        throw SystemError(errno, "ptrace(PTRACE_CONT)");
     }
 
     // Ensure that the setpgid call succeeded and then configure the options
@@ -311,7 +304,7 @@ pid_t start_tracee(string_view program, vector<string> argv)
     // caller to resume when they're ready.
     if (waitpid(pid, &status, 0) == -1)
     {
-        throw system_error(errno, generic_category(), "waitpid");
+        throw SystemError(errno, "waitpid");
     }
     if (!WIFSTOPPED(status) || WSTOPSIG(status) != SIGSTOP)
     {
@@ -321,8 +314,7 @@ pid_t start_tracee(string_view program, vector<string> argv)
     if (ptrace(PTRACE_SETOPTIONS, pid, 0, PTRACER_OPTIONS) == -1)
     {
         kill_and_reap(pid); // preserves errno
-        throw system_error(errno, generic_category(), 
-            "ptrace(PTRACE_SETOPTIONS)");
+        throw SystemError(errno, "ptrace(PTRACE_SETOPTIONS)");
     }
 
     return pid;
@@ -338,8 +330,7 @@ bool resume_tracee(pid_t pid, int signal)
         {
             return false;
         }
-        throw system_error(errno, generic_category(), 
-            "ptrace(PTRACE_SYSCALL)");
+        throw SystemError(errno, "ptrace(PTRACE_SYSCALL)");
     }
     return true;
 }
@@ -362,8 +353,7 @@ bool memset_tracee(pid_t pid, void* dest, uint8_t value, size_t len)
             {
                 return false;
             }
-            throw system_error(errno, generic_category(), 
-                "ptrace(PTRACE_POKEDATA)");
+            throw SystemError(errno, "ptrace(PTRACE_POKEDATA)");
         }
     }
     if (remainder != 0) 
@@ -379,8 +369,7 @@ bool memset_tracee(pid_t pid, void* dest, uint8_t value, size_t len)
         }
         if (errno != 0) 
         {
-            throw system_error(errno, generic_category(), 
-                "ptrace(PTRACE_PEEKDATA)");
+            throw SystemError(errno, "ptrace(PTRACE_PEEKDATA)");
         }
 
         memcpy(&word, &valueWord, remainder);
@@ -392,8 +381,7 @@ bool memset_tracee(pid_t pid, void* dest, uint8_t value, size_t len)
             {
                 return false;
             }
-            throw system_error(errno, generic_category(), 
-                "ptrace(PTRACE_POKEDATA)");
+            throw SystemError(errno, "ptrace(PTRACE_POKEDATA)");
         }
     }
     return true;
@@ -419,8 +407,7 @@ bool copy_from_tracee(pid_t pid, void* dest, void* src, size_t len)
         }
         if (errno != 0) 
         {
-            throw system_error(errno, generic_category(), 
-                "ptrace(PTRACE_PEEKDATA)");
+            throw SystemError(errno, "ptrace(PTRACE_PEEKDATA)");
         }
         if (i + 1 >= numWords) 
         {
@@ -454,8 +441,7 @@ bool copy_to_tracee(pid_t pid, void* dest, void* src, size_t len)
             {
                 return false;
             }
-            throw system_error(errno, generic_category(), 
-                "ptrace(PTRACE_POKEDATA)");
+            throw SystemError(errno, "ptrace(PTRACE_POKEDATA)");
         }
     }
     if (remainder != 0) 
@@ -471,8 +457,7 @@ bool copy_to_tracee(pid_t pid, void* dest, void* src, size_t len)
         }
         if (errno != 0) 
         {
-            throw system_error(errno, generic_category(), 
-                "ptrace(PTRACE_PEEKDATA)");
+            throw SystemError(errno, "ptrace(PTRACE_PEEKDATA)");
         }
 
         memcpy(&word, &words[i], remainder);
@@ -484,8 +469,7 @@ bool copy_to_tracee(pid_t pid, void* dest, void* src, size_t len)
             {
                 return false;
             }
-            throw system_error(errno, generic_category(), 
-                "ptrace(PTRACE_POKEDATA)");
+            throw SystemError(errno, "ptrace(PTRACE_POKEDATA)");
         }
     }
     return true;
@@ -511,8 +495,7 @@ bool copy_string_from_tracee(pid_t pid,
         }
         if (errno != 0) 
         {
-            throw system_error(errno, generic_category(), 
-                "ptrace(PTRACE_PEEKDATA)");
+            throw SystemError(errno, "ptrace(PTRACE_PEEKDATA)");
         }
 
         char *ch = (char*)&word;
@@ -542,8 +525,7 @@ bool copy_string_array_from_tracee(pid_t pid,
         }
         if (errno != 0) 
         {
-            throw system_error(errno, generic_category(), 
-                "ptrace(PTRACE_PEEKDATA)");
+            throw SystemError(errno, "ptrace(PTRACE_PEEKDATA)");
         }
 
         char* arg = (char*)result;

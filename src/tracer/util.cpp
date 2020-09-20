@@ -10,6 +10,7 @@
 #include <cctype>
 #include <algorithm>
 #include <cstring>
+#include <cassert>
 #include <mutex>
 #include <regex>
 
@@ -153,4 +154,62 @@ string_view get_base_name(string_view path)
         path.remove_prefix(pos + 1);
     }
     return path;
+}
+
+/* Helper function for escape_string(). */
+static bool is_weird_char(char c)
+{
+    return !isprint(c) || isspace(c);
+}
+
+/* Helper function for escape_string(). */
+static char hex_digit(int num)
+{
+    assert(0 <= num && num < 16);
+    if (num < 10)
+    {
+        return '0' + num;
+    }
+    return 'A' + num - 10;
+}
+
+string escaped_string(string_view str)
+{
+    int numWeird = std::count_if(str.begin(), str.end(), is_weird_char);
+    if (numWeird == 0)
+    {
+        return string(str);
+    }
+    string str2;
+    str2.reserve(str.size() + numWeird + 2); // may as well
+    str2 += '"';
+    for (char c : str)
+    {
+        switch (c)
+        {
+            case '\n':  str2 += "\\n";  continue;
+            case '\r':  str2 += "\\r";  continue;
+            case '\\':  str2 += "\\\\"; continue; // yeet
+            case '\0':  str2 += "\\0";  continue;
+            case '\v':  str2 += "\\v";  continue;
+            case '\b':  str2 += "\\b";  continue;
+            case '\f':  str2 += "\\f";  continue;
+            case '"':   str2 += "\\\""; continue;
+            case '\?':  str2 += "\\?";  continue;
+        }
+
+        if (isprint(c))
+        {
+            str2 += c;
+            continue;
+        }
+
+        // SUPER weird char - just print it as a hex byte escape
+        char x[4] = {'\\', 'x'};
+        x[2] = hex_digit((c & 0xF0) >> 4);
+        x[3] = hex_digit(c & 0x0F);
+        str2.append(x, 4);
+    }
+    str2 += '"';
+    return str2;
 }

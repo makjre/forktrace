@@ -528,18 +528,27 @@ static void register_commands(Forktrace& ft)
 {
     CommandParser& parser = ft.parser;
 
-    // General config
-    parser.add("colour", "ENABLED", "enable/disable colour",
-        [](string s) { set_colour_enabled(parse_bool(s)); }
-    );
-    parser.add("debug", "ENABLED", "enable/disable debug messages",
-        [](string s) { set_log_category_enabled(Log::DBG, parse_bool(s)); }
-    );
-    parser.add("verbose", "ENABLED", "enable/disable extra log messages",
-        [](string s) { set_log_category_enabled(Log::VERB, parse_bool(s)); }
+    parser.add("quit", "", "quit " + string(program_name()),
+        [] { throw QuitCommandLoop(); }
     );
 
-    // Viewing the process tree
+    parser.start_new_group("Log & colour");
+
+    parser.add("colour", "on|off", "enable/disable colour",
+        [](string s) { set_colour_enabled(parse_bool(s)); }
+    );
+    parser.add("debug", "on|off", "enable/disable debug messages",
+        [](string s) { set_log_category_enabled(Log::DBG, parse_bool(s)); }
+    );
+    parser.add("verbose", "on|off", "enable/disable extra log messages",
+        [](string s) { set_log_category_enabled(Log::VERB, parse_bool(s)); }
+    );
+    parser.add("log", "on|off", "enable/disable general log messages",
+        [](string s) { set_log_category_enabled(Log::LOG, parse_bool(s)); }
+    );
+
+    parser.start_new_group("Process tree");
+
     parser.add("list", "", "print a list of all tracees",
         [&] { ft.tracer.print_list(); }
     );
@@ -563,11 +572,13 @@ static void register_commands(Forktrace& ft)
         }
     );
 
-    // Starting/stopping/etc.
+    parser.start_new_group("Tracee control");
+
     parser.add("start", "PROGRAM [ARGS...]", "start a tracee program",
         [&](vector<string> args) { do_start(ft, std::move(args)); }
     );
-    parser.add("run", "PROGRAM [ARGS...]", "same as start & go",
+    parser.add("run", "PROGRAM [ARGS...]", 
+        "equivalent to \"start\" followed by \"go\"",
         [&](vector<string> args) { do_run(ft, std::move(args)); }
     );
     parser.add("march", "", "resume all tracees until they stop again",
@@ -580,7 +591,8 @@ static void register_commands(Forktrace& ft)
         [&] { do_go(ft); }
     );
 
-    // Diagram config options
+    parser.start_new_group("Diagram config");
+
     parser.add("lane-width", "WIDTH", "set the diagram lane width",
         [&](string s) { ft.opts.laneWidth = parse_number<size_t>(s); }
     );
@@ -599,11 +611,6 @@ static void register_commands(Forktrace& ft)
     parser.add("merge-execs", "yes|no", 
         "if true, merge retried execs of the same program",
         [&](string s) { ft.opts.mergeExecs = parse_bool(s); }
-    );
-
-    // Other
-    parser.add("quit", "", "quit " + string(program_name()),
-        [] { throw QuitCommandLoop(); }
     );
 }
 

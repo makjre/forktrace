@@ -53,4 +53,9 @@ std::vector<std::string_view> split_views(std::string_view str,
 /* Strips the directory from the provided path, if present. */
 std::string_view get_base_name(std::string_view path);
 
+/* If str contains spaces or non-printable characters, then it is returned as
+ * a double-quoted string with C escape sequences (e.g., a newline is turned
+ * into "\\n"). Otherwise, an unchanged string is returned. */
+std::string escaped_string(std::string_view str);
+
 #endif /* FORKTRACE_UTIL_HPP */

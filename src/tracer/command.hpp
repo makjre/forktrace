@@ -7,7 +7,6 @@
 #ifndef FORKTRACE_COMMAND_HPP
 #define FORKTRACE_COMMAND_HPP
 
-#include <map>
 #include <string>
 #include <memory>
 #include <functional>
@@ -29,13 +28,20 @@ class CommandParser
 private:
     struct Command
     {
+        std::string name;
         std::string params; // Description of the parameters (maybe empty).
         std::string help; // No line breaks needed. We'll wrap it ourselves.
         std::function<void(std::vector<std::string>)> action;
         bool autoRepeat; // If true, pressing enter repeats the command.
     };
 
-    std::map<std::string, Command> _commands;
+    struct Group
+    {
+        std::string name;
+        std::vector<Command> commands; // no need for a map (we'll loop anyway)
+        Group(std::string_view name) : name(name) { } 
+    };
+    std::vector<Group> _groups;
 
     /* If the previous command had autoRepeat=true, then we'll store that line
      * here so that we know to repeat it if we get an empty line afterwards. */
@@ -49,11 +55,15 @@ private:
      * Otherwise, an error is printed and null is returned. */
     const Command* find_command(std::string_view prefix) const;
 
-    /* The internal handler for the built-in help command */
+    /* The internal functions for the built-in help command */
     void help_handler(std::vector<std::string> args) const;
+    void print_help(const Group& group) const;
     
 public:
     CommandParser();
+
+    /* Starts a new command group. */
+    void start_new_group(std::string_view name);
     
     /* Register a command that takes no arguments. */
     void add(std::string_view name,

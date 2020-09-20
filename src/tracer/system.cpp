@@ -59,6 +59,11 @@ static const string_view signals[] = {
     "SIGSYS",
 };
 
+SystemError::SystemError(int err, string_view cause) : _code(err)
+{
+    _msg = format("{}: {} (errno={})", cause, strerror_s(err), err);
+}
+
 string_view get_signal_name(int signal) 
 {
     if (0 <= signal && (size_t)signal < ARRAY_SIZE(signals)) 

@@ -3,7 +3,6 @@
 #include <cassert>
 #include <iostream>
 #include <cstring>
-#include <system_error>
 #include <fmt/core.h>
 #include <sys/wait.h>
 
@@ -18,8 +17,6 @@ using std::string_view;
 using std::vector;
 using std::shared_ptr;
 using std::unique_ptr;
-using std::system_error;
-using std::generic_category;
 using fmt::format;
 
 /******************************************************************************
@@ -219,14 +216,14 @@ bool WaitCall<Result, ZeroTheResult, ResultArgIndex>
                 return false;
             }
         } 
-        catch (const system_error& e) 
+        catch (const SystemError& e) 
         {
             // intercept EFAULT/EIO, which will occur if the tracee specifies
             // a bad memory address as the result argument for the wait call.
             // If that has happened, then we'll indicate that by setting both
             // _oldData and _result to null. Then when we come to finalise the
             // wait call, we'll just let it fail.
-            if (e.code().value() != EFAULT && e.code().value() != EIO) 
+            if (e.code() != EFAULT && e.code() != EIO) 
             {
                 throw e;
             }
@@ -425,8 +422,7 @@ void Tracer::handle_fork(Tracee& tracee)
             expect_ended(tracee);
             return;
         }
-        throw system_error(errno, generic_category(),
-            "ptrace(PTRACE_GETEVENTMSG)");
+        throw SystemError(errno, "ptrace(PTRACE_GETEVENTMSG)");
     }
 
     auto process = std::make_shared<Process>(childId, tracee.process);
@@ -471,17 +467,25 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
             return;
         }
     } 
-    catch (const system_error& e) 
+    catch (const SystemError& e) 
     {
         // Intercept EFAULT/EIO - which will occur if the tracee provides bad
         // addresses as arguments to execve. In that cause, just continue on
         // as per usual and let the exec call fail.
-        if (e.code().value() != EFAULT && e.code().value() != EIO) 
+        if (e.code() != EFAULT && e.code() != EIO) 
         {
             throw e;
         }
     }
 
+    // Format the strings so that they nicely shows weird characters as escapes
+    for (string& arg : args)
+    {
+        arg = escaped_string(arg);
+    }
+    file = escaped_string(file);
+
+    // resume and expect the exec event if the exec succeeded
     int status;
     if (!resume(tracee) || !wait_for_stop(tracee, status)) 
     {
@@ -489,7 +493,7 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
     }
     if (!IS_EXEC_EVENT(status)) 
     {
-        /* Exec has failed!!! */
+        // Exec has failed!!!
         if (!IS_SYSCALL_EVENT(status)) 
         {
             throw diagnose_bad_event(tracee, status,
@@ -505,12 +509,7 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
             return;
         }
 
-        int err = (long)retval;
-        if (err >= 0) 
-        {
-            log("{}: exec failed but returned {}", tracee.pid, err); // why?
-        }
-
+        int err = (long)retval; // TODO why did I check >= 0 previously?
         tracee.process->notify_exec(std::move(file), std::move(args), -err);
         return;
     }
@@ -580,7 +579,7 @@ void Tracer::handle_kill(Tracee& tracee,
             throw BadTraceError(tracee.pid, "Waited for tracee "
                 "(after it called kill et al), but it doesn't exist.");
         }
-        throw system_error(errno, generic_category(), "waitpid");
+        throw SystemError(errno, "waitpid");
     }
     if (!WIFSTOPPED(status)) 
     {
@@ -786,8 +785,7 @@ void Tracer::handle_signal_stop(Tracee& tracee, int signal)
             expect_ended(tracee);
             return;
         }
-        throw system_error(errno, generic_category(), 
-            "ptrace(PTRACE_GETSIGINFO)");
+        throw SystemError(errno, "ptrace(PTRACE_GETSIGINFO)");
     }
 
     tracee.process->notify_signaled(info.si_pid, signal);
@@ -880,7 +878,7 @@ bool Tracer::wait_for_stop(Tracee& tracee, int& status)
             throw BadTraceError(tracee.pid, 
                 "Waited for tracee to stop but it doesn't exist.");
         }
-        throw system_error(errno, generic_category(), "waitpid");
+        throw SystemError(errno, "waitpid");
     }
     if (WIFSTOPPED(status)) 
     {
@@ -930,7 +928,7 @@ void Tracer::expect_ended(Tracee& tracee)
             throw BadTraceError(tracee.pid, 
                 "Expected tracee to have ended but it doesn't exist.");
         }
-        throw system_error(errno, generic_category(), "waitpid");
+        throw SystemError(errno, "waitpid");
     }
     if (!WIFEXITED(status) && !WIFSIGNALED(status))
     {
@@ -1003,7 +1001,7 @@ shared_ptr<Process> Tracer::start(string_view program, vector<string> argv)
         int status;
         if (waitpid(pid, &status, 0) == -1)
         {
-            throw system_error(errno, generic_category(), "waitpid");
+            throw SystemError(errno, "waitpid");
         }
         handle_wait_notification(it->second, status);
     }

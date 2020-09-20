@@ -9,6 +9,7 @@
 #include <mutex>
 #include <cassert>
 #include <optional>
+#include <unistd.h>
 
 #include "log.hpp"
 #include "util.hpp"
@@ -17,6 +18,7 @@
 using std::string;
 using std::string_view;
 using std::optional;
+using fmt::format;
 
 /* Don't need this to be synchronized since we only write it once at the very
  * start of the program and it's read-only from there-on out. */
@@ -25,8 +27,6 @@ static string gProgramName;
 /* Stores whether or not each log category is currently enabled or not... */
 static std::atomic<bool> gLogCategoryEnabled[size_t(Log::NUM_LOG_CATEGORIES)];
 
-// Colours other settings for our log messages
-constexpr string_view PREFIX = "[forktrace] ";
 constexpr Colour PREFIX_COLOUR = Colour::GREY;
 constexpr Colour ERROR_COLOUR = Colour::RED | Colour::BOLD;
 constexpr Colour WARNING_COLOUR = Colour::PURPLE | Colour::BOLD;
@@ -45,6 +45,7 @@ bool init_log(const char* argv0)
         error("argv[0] is null??? Are you crazy?! Give me a name!");
         return false;
     }
+
     gProgramName = get_base_name(argv0);
     return true;
 }
@@ -70,9 +71,10 @@ bool is_log_enabled_for(Log category)
  * opt for no log category at all (otherwise the same as message()). */
 static void message_internal(optional<Log> logCategory, string_view message)
 {
+    string prefix = format("[{}] ", getpid());
     string line;
     line.reserve(message.size() + 40);
-    line += colour(PREFIX_COLOUR, PREFIX);
+    line += colour(PREFIX_COLOUR, prefix);
     if (logCategory.has_value())
     {
         switch (logCategory.value())
@@ -99,7 +101,7 @@ static void message_internal(optional<Log> logCategory, string_view message)
         line.append(message.substr(pos, next - pos + 1));
         std::cerr << line; // TODO cerr thread safe??!?!?!
         pos = next + 1;
-        line = colour(PREFIX_COLOUR, PREFIX); // start off the next line
+        line = colour(PREFIX_COLOUR, prefix); // start off the next line
     }
     if (pos < message.size())
     {

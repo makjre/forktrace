@@ -5,7 +5,6 @@
  *      TODO
  */
 #include <cassert>
-#include <system_error>
 #include <fmt/core.h>
 
 #include "terminal.hpp"

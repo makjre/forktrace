@@ -323,6 +323,12 @@ string ExecEvent::to_string() const
         calls.back().to_string(*this), calls.size());
 }
 
+const ExecCall& ExecEvent::call() const
+{
+    assert(!calls.empty());
+    return calls.back();
+}
+
 void ExecEvent::print_tree(Indent indent) const 
 {
     for (auto& call : calls) 

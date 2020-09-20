@@ -11,7 +11,6 @@
 #include <functional>
 #include <algorithm>
 #include <optional>
-#include <map>
 #include <memory>
 
 #include "util.hpp"
@@ -28,7 +27,6 @@ using std::string_view;
 using std::vector;
 using std::function;
 using std::optional;
-using std::map;
 using std::unique_ptr;
 using fmt::format;
 
@@ -343,9 +341,13 @@ void ArgParser::add(string_view name,
     assert(!find(name));
     assert(!find(shortName));
     assert(!_groups.empty());
-    _groups.back().options.push_back(std::make_unique<Option0>(
+    vector<unique_ptr<Option>>& options = _groups.back().options;
+    options.push_back(std::make_unique<Option0>(
         name, shortName, param, help, handler
     ));
+    std::sort(options.begin(), options.end(), 
+        [](unique_ptr<Option>& a, unique_ptr<Option>& b) { 
+            return a->name.compare(b->name) < 0; }); // yeet
 }
 
 void ArgParser::add(string_view name, 
@@ -366,9 +368,13 @@ void ArgParser::add(string_view name,
     assert(!find(name));
     assert(!find(shortName));
     assert(!_groups.empty());
-    _groups.back().options.push_back(std::make_unique<Option1>(
+    vector<unique_ptr<Option>>& options = _groups.back().options;
+    options.push_back(std::make_unique<Option1>(
         name, shortName, param, help, handler
     ));
+    std::sort(options.begin(), options.end(), 
+        [](unique_ptr<Option>& a, unique_ptr<Option>& b) { 
+            return a->name.compare(b->name) < 0; }); // yeet
 }
 
 void ArgParser::add(string_view name, 
@@ -799,6 +805,9 @@ static void register_options(ArgParser& parser, Forktrace::Options& opts)
     parser.add("debug", 'd', "", "shows debugging log messages", 
         []{ set_log_category_enabled(Log::DBG, true); }
     );
+    parser.add("no-log", 'l', "", "disable general log messages",
+        []{ set_log_category_enabled(Log::LOG, false); }
+    );
 }
 
 static bool do_all_the_things(int argc, const char** argv)
@@ -833,5 +842,13 @@ static bool do_all_the_things(int argc, const char** argv)
 
 int main(int argc, const char** argv) 
 {
-    return do_all_the_things(argc, argv) ? 0 : 1;
+    try
+    {
+        return do_all_the_things(argc, argv) ? 0 : 1;
+    }
+    catch (const std::exception& e)
+    {
+        error("Fatal! Got unhandled exception: {}", e.what());
+        return 1;
+    }
 }

@@ -149,7 +149,7 @@ public:
 
     /* Start a tracee from command line arguments. The path will be searched
      * for the program. This tracee will become our child and the new leader 
-     * process. The args list includes argv[0]. Throws either a system_error
+     * process. The args list includes argv[0]. Throws either a SystemError
      * or runtime_error on failure. */
     std::shared_ptr<Process> start(std::string_view path, 
                                    std::vector<std::string> argv);

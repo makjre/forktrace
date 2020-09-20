@@ -261,6 +261,10 @@ struct ExecEvent : Event
     virtual void print_tree(Indent indent) const;
     virtual void draw(IEventRenderer& renderer) const;
 
+    /* Gets the most recent exec call. An assertion fails if no events (this
+     * should not happen since the struct is constructed with at least one). */
+    const ExecCall& call() const;
+
     /* Gets the most recent file that was execed. If there are no calls in the
      * list then an assertion will fail. */
     std::string file() const;

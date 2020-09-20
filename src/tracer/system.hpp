@@ -19,6 +19,19 @@
 #error "I don't support your architecture lol."
 #endif
 
+/* Throw this to describe a errno error. A bit nicer than std::system_error. */
+class SystemError : public std::exception
+{
+private:
+    std::string _msg;
+    int _code;
+public:
+    /* The cause should be a function name or something similar. */
+    SystemError(int err, std::string_view cause);
+    const char* what() const noexcept { return _msg.c_str(); }
+    int code() const noexcept { return _code; }
+};
+
 /* This is a non-exhaustive list that just contains as many syscall numbers
  * as I need. I get all my syscall numbers from:
  *

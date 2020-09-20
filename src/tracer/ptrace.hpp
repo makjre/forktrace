@@ -40,7 +40,7 @@
 #define IS_CLONE_LIKE_A_FORK(args) (((args)[0] & 0xFF) == SIGCHLD)
 
 /* Starts a tracee using the specified program and argments. Will throw
- * system_error if a syscall failed or runtime_error if something weird 
+ * SystemError if a syscall failed or runtime_error if something weird 
  * happened (e.g., the tracee was killed by an unknown signal). The child 
  * is started within a new process group. Returns the pid of the tracee. 
  * The child is started in a stopped state. The tracee will be configured
@@ -55,29 +55,29 @@
  * Also prevents the child from inheriting any of our blocked signals. */
 pid_t start_tracee(std::string_view program, std::vector<std::string> argv);
 
-/* Resumes the traced process. Throws system_error on failure (which will
+/* Resumes the traced process. Throws SystemError on failure (which will
  * include if the tracee is not currently stopped). If the tracee could not
  * be found, then false is returned (i.e., ptrace gave ESRCH). If signal != 0,
  * then the specified signal will be delivered to the process when resumed. */
 bool resume_tracee(pid_t pid, int signal = 0);
 
 /* Sets a block of memory within the tracee's memory space. Will throw
- * a system_error on failure (which could be EIO if the address is bad).
+ * a SystemError on failure (which could be EIO if the address is bad).
  * Returns false if the tracee does not exist anymore. */
 bool memset_tracee(pid_t tracee, void* dest, uint8_t value, size_t len);
 
 /* Copies a block of memory from the tracee's address space to our address
- * space. Throws a system_error on failure (EIO if region is bad). Returns
+ * space. Throws a SystemError on failure (EIO if region is bad). Returns
  * false if the tracee doesn't exist anymore. */
 bool copy_from_tracee(pid_t tracee, void* dest, void* src, size_t len);
 
 /* Copies a block of memory from our address space to the tracee's address 
- * space. Throws a system_error on failure (EIO if region is bad). Returns
+ * space. Throws a SystemError on failure (EIO if region is bad). Returns
  * false if the tracee doesn't exist anymore. */
 bool copy_to_tracee(pid_t tracee, void* dest, void* src, size_t len);
 
 /* Copies a null-termianted string from the address space of the tracee to
- * our own address space. Throws a system_error on failure (e.g., EIO) and
+ * our own address space. Throws a SystemError on failure (e.g., EIO) and
  * returns false if the tracee doesn't exist anymore. */
 bool copy_string_from_tracee(pid_t tracee, 
                              const char* src, 
@@ -85,7 +85,7 @@ bool copy_string_from_tracee(pid_t tracee,
 
 /* Copies a null-terminated string array (such as the argv or envp arrays).
  * from the address space of the tracee and stores the result in a vector.
- * Throws a system_error on failure (e.g., EIO if the memory region is bad)
+ * Throws a SystemError on failure (e.g., EIO if the memory region is bad)
  * and returns false if the tracee doesn't exist anymore. */
 bool copy_string_array_from_tracee(pid_t tracee,
                                    const char** traceeAddr, 
@@ -93,27 +93,27 @@ bool copy_string_array_from_tracee(pid_t tracee,
 
 /* Find somewhere in the tracee's memory space that we can use to store the
  * result of a syscall (when the tracee didn't want a result themselves).
- * Throws system_error on failure or returns false if the tracee couldn't
+ * Throws SystemError on failure or returns false if the tracee couldn't
  * be found (e.g., ESRCH from ptrace). */
 bool get_tracee_result_addr(pid_t pid, void*& result);
 
 /* Modify the registers of the tracee to change the value of a syscall arg.
- * This should only be done when in a syscall-entry-stop. Throws system_error
+ * This should only be done when in a syscall-entry-stop. Throws SystemError
  * on failure or returns false if the tracee couldn't be found. */
 bool set_syscall_arg(pid_t pid, size_t val, int argIndex);
 
 /* Modify the registers of the tracee to change the syscall number that will
  * be called. This should only be done when in a syscall-entry-stop. Throws 
- * system_error on failure or returns false if the tracee couldn't be found. */
+ * SystemError on failure or returns false if the tracee couldn't be found. */
 bool set_syscall(pid_t pid, int syscall);
 
 /* Find out the syscall number and arguments (we must be in a syscall-entry-
- * stop for this to work and make sense). Throws system_error on false or
+ * stop for this to work and make sense). Throws SystemError on false or
  * returns false if the tracee couldn't be found. */
 bool which_syscall(pid_t pid, int& syscall, size_t args[SYS_ARG_MAX]); 
 
 /* Get the return value of the syscall when in a syscall-exit-stop. Throws
- * system_error on failure or returns false if the tracee doesn't exist. */
+ * SystemError on failure or returns false if the tracee doesn't exist. */
 bool get_syscall_ret(pid_t pid, size_t& retval);
 
 #endif /* FORKTRACE_PTRACE_HPP */

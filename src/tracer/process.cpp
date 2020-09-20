@@ -197,12 +197,7 @@ void Process::notify_exec(string file, vector<string> args, int errcode)
         return;
     }
 
-    // This isn't really a ProcessTreeError kind of thing, it's just a have-I-
-    // used-my-own-functions correctly type of assertion. (ExecEvents should
-    // always be created with one initial call).
-    assert(!event->calls.empty());
-
-    if (get_base_name(file) != get_base_name(event->calls.back().file)
+    if (get_base_name(file) != get_base_name(event->call().file)
         || event->args != args) 
     {
         // the last exec was for a different program or args - don't merge
@@ -221,7 +216,7 @@ void Process::notify_exec(string file, vector<string> args, int errcode)
 
     // TODO maybe move printing of location into the event code itself? That
     // would clean some of this up.
-    string str = event->calls.back().to_string(*event);
+    string str = event->call().to_string(*event);
     if (event->location.has_value())
     {
         log("{} @ {}", str, event->location->to_string());
@@ -365,7 +360,8 @@ string Process::command_line(int eventIndex) const
 {
     if (const ExecEvent* lastExec = most_recent_exec(eventIndex))
     {
-        return format("{} [ {} ]", lastExec->file(), join(lastExec->args));
+        const vector<string>& args = lastExec->args;
+        return format("{} [ {} ]", lastExec->call().file, join(args));
     }
     else
     {

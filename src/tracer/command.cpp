@@ -20,7 +20,6 @@
 using std::string;
 using std::string_view;
 using std::vector;
-using std::map;
 using std::function;
 using std::optional;
 
@@ -83,6 +82,7 @@ bool read_line(string_view prompt, string& line, bool complete)
 
 CommandParser::CommandParser()
 {
+    start_new_group("");
     add("help", "[COMMAND]", 
         "shows help about a command, or all if none specified", 
         [&](vector<string> args) { help_handler(args); });
@@ -91,16 +91,21 @@ CommandParser::CommandParser()
 const CommandParser::Command* 
 CommandParser::find_command(string_view prefix) const
 {
-    vector<string> matches;
-    for (const auto& [name, command] : _commands)
+    vector<string> names;
+    vector<const Command*> matches;
+    for (const Group& group : _groups)
     {
-        if (name == prefix)
+        for (const Command& command : group.commands)
         {
-            return &command; // exact match
-        }
-        if (starts_with(name, prefix))
-        {
-            matches.push_back(name);
+            if (command.name == prefix) // exact match
+            {
+                return &command;
+            }
+            if (starts_with(command.name, prefix))
+            {
+                names.push_back(command.name);
+                matches.push_back(&command);
+            }
         }
     }
     if (matches.empty())
@@ -110,50 +115,35 @@ CommandParser::find_command(string_view prefix) const
     }
     if (matches.size() > 1)
     {
-        error("'{}' is ambiguous. Options are: {}", prefix, join(matches));
+        error("'{}' is ambiguous. Options are: {}", prefix, join(names));
         return nullptr;
     }
-    auto it = _commands.find(matches.front());
-    assert(it != _commands.end()); // is there really any point in this
-    return &it->second;
+    return matches.front();
 }
 
-void CommandParser::help_handler(vector<string> args) const
+void CommandParser::print_help(const CommandParser::Group& group) const
 {
-    if (args.size() > 1)
+    if (!group.name.empty())
     {
-        error("The 'help' command accepts either zero or one arguments.");
-        return;
-    }
-    if (args.size() == 1)
-    {
-        auto it = _commands.find(args[0]);
-        if (it == _commands.end())
-        {
-            error("The '{}' command does not exist. Try 'help'.", args[0]);
-            return;
-        }
-        string cmd = it->first + ' ' + it->second.params;
-        std::cerr << colour(Colour::BOLD, cmd) << '\n';
-        std::cerr << wrap_text_to_screen(it->second.help, false, 0);
-        return;
+        std::cerr << '\n' << group.name << '\n';
     }
 
     // Calculate the largest width of command name + argments so that we know
     // what to pad the command help strings to to make it look pretty.
     size_t padding = 0;
-    for (const auto& [name, command] : _commands)
+    for (const Command& command : group.commands)
     {
-        padding = std::max(padding, name.size() + 1 + command.params.size());
+        padding = std::max(padding, 
+            command.name.size() + 1 + command.params.size());
     }
     padding += 2;
 
-    for (const auto& [name, command] : _commands)
+    for (const Command& command : group.commands)
     {
         size_t width = 0, height = 0;
         get_terminal_size(width, height); // this could fail (and return false)
 
-        string line = colour(Colour::BOLD, name);
+        string line = colour(Colour::BOLD, command.name);
         if (!command.params.empty())
         {
             line += ' ' + command.params;
@@ -172,10 +162,43 @@ void CommandParser::help_handler(vector<string> args) const
     }
 }
 
+void CommandParser::help_handler(vector<string> args) const
+{
+    if (args.size() > 1)
+    {
+        error("The 'help' command accepts either zero or one arguments.");
+        return;
+    }
+    if (args.size() == 1)
+    {
+        const Command* command = find_command(args[0]);
+        if (!command)
+        {
+            error("The '{}' command does not exist. Try 'help'.", args[0]);
+            return;
+        }
+        string cmd = command->name + ' ' + command->params;
+        std::cerr << colour(Colour::BOLD, cmd) << '\n';
+        std::cerr << wrap_text_to_screen(command->help, false, 0);
+        return;
+    }
+    std::cerr << '\n';
+    for (const Group& group : _groups)
+    {
+        print_help(group);
+    }
+    std::cerr << '\n';
+}
+
 static bool is_valid_name(string_view name)
 {
     auto isBad = [](char c) { return !isalnum(c) && c != '_' && c != '-'; };
     return std::find_if(name.begin(), name.end(), isBad) == name.end();
+}
+
+void CommandParser::start_new_group(string_view name)
+{
+    _groups.emplace_back(name);
 }
 
 void CommandParser::add(string_view name,
@@ -219,13 +242,18 @@ void CommandParser::add(string_view name,
                         bool autoRepeat)
 {
     Command command;
+    command.name = name;
     command.params = params;
     command.help = help;
     command.action = action;
     command.autoRepeat = autoRepeat;
     assert(is_valid_name(name));
     assert(action);
-    _commands.emplace(name, command);
+    assert(!_groups.empty());
+    vector<Command>& commands = _groups.back().commands;
+    commands.push_back(std::move(command));
+    std::sort(commands.begin(), commands.end(), 
+        [](Command& a, Command& b) { return a.name.compare(b.name) < 0; });
 }
 
 /* Convert a hexadecimal digit to an integer. Asserts that it's in range. */
