@@ -7,9 +7,16 @@ Use gcc/g++ (clang could work, idk). You'll need a version of g++ recent enough
 that it supports C++17. You'll need make obviously. `build-essentials` should
 probably have what you need. 
 
-You'll need the ncurses and readline libraries. On my Ubuntu system they seem 
-to be in the packages `libreadline-dev` and `libncurses-dev` (on Ubuntu, you
-could use `sudo apt install package-name` to install each).
+You'll need the ncurses, readline and fmt libraries (the latter is C++ only).
+On my Ubuntu system, these libraries have the following package names:
+
+- `libncurses-dev`
+- `libreadline-dev`
+- `libfmt-dev`
+
+Use your package manager to install them. You can also quite easily build and
+install `libfmt` from source like I did (just clone their git repo, then run
+`cmake . ; make ; sudo make install` inside it).
 
 ## How it works
 This project consists of two programs that work together: tracer and reaper.

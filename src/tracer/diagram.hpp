@@ -1,69 +1,42 @@
-#ifndef DIAGRAM_H
-#define DIAGRAM_H
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  diagram
+ *
+ *      TODO
+ */
+#ifndef FORKTRACE_DIAGRAM_HPP
+#define FORKTRACE_DIAGRAM_HPP
 
 #include <unordered_map>
 #include <vector>
 #include <memory>
 
-#include "terminal.hpp"
 #include "event.hpp"
-#include "util.hpp"
 
-class Process; // defined in process.h
-
-/* An object that draws events onto the diagram. Only used in diagram.cpp (only
- * in header file cuz muh 'incomplete type'). */
-class Drawer : public IEventRenderer {
-private:
-    size_t _laneWidth; // columns per each lane
-    size_t _xExtent; // smallest index that can be drawn to without truncating
-    size_t _x; // current x index (indexed from the left, from 0)
-    size_t _y; // current y index (indexed from the top, from 0)
-    bool _truncated; // set to true if lane width was too small
-    std::unique_ptr<Window> _win; // What we're drawing to
-
-public:
-    Drawer(size_t laneWidth) : _laneWidth(laneWidth), _xExtent(0), _x(0), 
-        _y(0), _truncated(false) { }
-
-    void start(size_t numLanes, size_t numLines);
-    void startLane(size_t lane);
-    void startLine(size_t line);
-    bool truncated() const { return _truncated; }
-    size_t laneWidth() const { return _laneWidth; }
-    const Window& result() const; // MUST call start first!!
-
-    void drawLink(const LinkEvent& event);
-    void drawContinuation(size_t lane, Colour c, char ch);
-    
-    /* Implementations for IEventRenderer */
-    virtual void backtrack(size_t steps);
-    virtual void drawChar(Colour c, char ch, size_t count = 1);
-    virtual void drawString(Colour c, std::string_view str);
-};
+class Window; // defined in terminal.hpp
+class Process; // defined in process.hpp
+class Drawer; // defined in diagram.cpp
 
 /* This class allows you to build and draw diagrams produced by process trees.
  * This object does not take ownership (whether unique or shared) of each of
  * the Process/Event objects that constitute the process tree. Thus, while this
  * object exists, the process tree should not be modified or destroyed. */
-class Diagram {
+class Diagram 
+{
 public:
-    struct Options {
-        unsigned laneWidth;
-        bool hideExecs; // if true, ALL execs are hidden, good or bad
-        bool hideBadExecs; // if hideExecs==true, then this doesn't matter
-        bool hideNonFatalSignals;
-        bool hideSignalSends;
-
-        Options(unsigned width, bool noExecs, bool noBadExecs,
-                bool noReceives, bool noSends) 
-            : laneWidth(width), hideExecs(noExecs), hideBadExecs(noBadExecs),
-            hideNonFatalSignals(noReceives), hideSignalSends(noSends) { }
+    enum Options
+    {
+        SHOW_EXECS              = 1 << 0,
+        SHOW_FAILED_EXECS       = 1 << 1,
+        SHOW_NON_FATAL_SIGNALS  = 1 << 2,
+        SHOW_SIGNAL_SENDS       = 1 << 3, // TODO implement
     };
+    static constexpr int DEFAULT_OPTS = SHOW_EXECS | SHOW_SIGNAL_SENDS;
 
 private:
     /* Represents the location of a Process as viewed on the diagram. */
-    struct Path {
+    struct Path 
+    {
         int startLine;
         int endLine; // -1 if not sure yet
         int lane; // -1 if not sure yet
@@ -81,7 +54,8 @@ private:
     /* This class represents a point in a process's lifecycle which occurs on
      * a particular line of the diagram. Each line contains a bunch of lanes, 
      * which are occupied by these Nodes. */
-    struct Node {
+    struct Node 
+    {
         const Process& process;
         const Event* const event;
         const int next; // index of pending event, or -1 if none
@@ -90,15 +64,17 @@ private:
             : process(process), event(event), next(next) { }
 
         bool zombie() const; // does this node correspond to a zombie process
-        bool endOfPath() const; // are successors permitted after this?
-        const Event* const nextEvent() const; // return null if no next event
+        bool end_of_path() const; // are successors permitted after this?
+        const Event* const next_event() const; // return null if no next event
         void print(Indent indent = 0) const;
     };
 
+    /* The _renderer is a pointer just so that we don't have to define the
+     * Drawer class in this header file (to avoid an incomplete type). */
     const Process& _leader; // the root of the process tree
-    Drawer _renderer; // the object that renders the diagram
+    std::unique_ptr<Drawer> _renderer; // the object that renders the diagram
     size_t _laneCount;  // index of rightmost lane + 1
-    Options _options; // rendering options
+    int _options; // rendering config (TODO why no implicit int? compiler bug?)
 
     /* Stores the location/information about the path occupied by each process
      * on the diagram. I could store that information inside the Process class
@@ -114,32 +90,39 @@ private:
      * vector (they'll be invalidated if vector resized etc.). */
     std::vector<std::vector<Node>> _lines;
 
-    int getNextEvent(const Process& process, int start);
-    Node getSuccessor(const Node& prevNode);
-    Node continuePath(const Node& prevNode);
-    Node startPath(const Process& process);
-    void allocateProcessToLane(std::vector<std::vector<Path*>>& lanes, 
+    /* Private functions, see source file. */
+    int get_next_event(const Process& process, size_t start);
+    Node get_successor(const Node& prevNode);
+    Node continue_path(const Node& prevNode);
+    Node start_path(const Process& process);
+    void allocate_process_to_lane(std::vector<std::vector<Path*>>& lanes, 
             const Process& process);
-    bool pathReadyToEnd(const std::vector<Node>& prevLine,
+    bool path_ready_to_end(const std::vector<Node>& prevLine,
             const Process& process) const;
-    const Process* doLinkEvent(std::vector<Node>& curLine, int lineNum, 
+    const Process* do_link_event(std::vector<Node>& curLine, int lineNum, 
             Path& path, const Node& prevNode, const LinkEvent& event);
-    bool buildNextLine();
-    void drawLine(const std::vector<Node>& line, size_t lineNum);
+    bool build_next_line();
+    void draw_line(const std::vector<Node>& line, size_t lineNum);
     void draw();
 
 public:
     /* This will build the diagram. Once this constructor returns, the diagram
-     * will be accessible via the getWindow() function. The `laneWidth` param
+     * will be accessible via the get_window() function. The `laneWidth` param
      * determines the number of columns used by each lane of the diagram. */
-    Diagram(const Process& leader, Options opts);
+    Diagram(const Process& leader, size_t laneWidth, int opts = DEFAULT_OPTS);
+
+    /* Needed to not make std::unique_ptr angry for some reason... */
+    ~Diagram();
 
     /* Return the diagram drawn onto a curses pad. */
-    const Window& result() { return _renderer.result(); }
+    const Window& result() const;
+
+    /* Request the diagram to redraw (e.g. if tree is updated). */
+    void redraw();
 
     /* Returns true if parts of the diagram had to be truncated to fit them on
      * the diagram (this means that the lane width should be increased). */
-    bool truncated() const { return _renderer.truncated(); }
+    bool truncated() const;
 
     /* Given the specified coordinates, try to find the event located there,
      * or return nullptr if we couldn't find it. The process of the path that
@@ -149,25 +132,30 @@ public:
      * list is stored in `eventIndex`. Otherwise, the index of the most recent
      * event occurring on that path (searching back from `line`) is stored (if
      * there are no events preceding `line`, then -1 is stored). */
-    const Event* find(size_t lane, size_t line, const Process*& process,
-            int& eventIndex);
+    const Event* find(size_t lane,
+                      size_t line,
+                      const Process*& process,
+                      int& eventIndex) const;
 
     /* Given the specified lane/line coordinates, convert them into the x/y
      * coordinates for the result() Window that we drew on to. If `lane` or
      * `line` are out of bounds, then the resulting coordinates will also be
      * out of bounds. */
-    void getCoords(size_t lane, size_t line, size_t& x, size_t& y);
+    void get_coords(size_t lane, size_t line, size_t& x, size_t& y) const;
 
     /* Determines what lane the specified process appears in. An assertion will
      * fail if the process couldn't be found in any lane. */
-    size_t locate(const Process& process);
+    size_t locate(const Process& process) const;
 
     /* Get the number of lanes/lines on the diagram. */
-    size_t lineCount() const { return _lines.size(); }
-    size_t laneCount() const { return _laneCount; }
+    size_t line_count() const { return _lines.size(); }
+    size_t lane_count() const { return _laneCount; }
+
+    /* Get the leader process of this diagram. */
+    const Process& leader() const { return _leader; }
 
     /* For debugging. Prints internal structures to log. */
     void print() const;
 };
 
-#endif /* DIAGRAM_H */
+#endif /* FORKTRACE_DIAGRAM_HPP */

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+if [ ! -f valgrind.supp ]
+then
+    echo "Please generate the suppressions file with ./gen-suppressions.sh"
+    exit 1
+fi
+
+# Runs valgrind with our suppressions file that ignores dumb errors
+valgrind --suppressions=valgrind.supp $*

@@ -1,21 +1,27 @@
-#ifndef EVENT_H
-#define EVENT_H
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
+ *
+ *  event
+ *
+ *      TODO
+ */
+#ifndef FORKTRACE_EVENT_HPP
+#define FORKTRACE_EVENT_HPP
 
 #include <memory>
 #include <string>
 #include <vector>
-#include <cassert>
+#include <optional>
 
 #include "terminal.hpp"
-#include "util.hpp"
+#include "log.hpp"
 
 class Process; // defined in process.h
 struct ExecEvent; // defined in this file
 
-constexpr auto EXITED_COLOUR = Colour::GREEN_BOLD;
-constexpr auto KILLED_COLOUR = Colour::RED_BOLD;
+constexpr auto EXITED_COLOUR = Colour::GREEN | Colour::BOLD;
+constexpr auto KILLED_COLOUR = Colour::RED | Colour::BOLD;
 constexpr auto SIGNAL_COLOUR = Colour::YELLOW;
-constexpr auto EXEC_COLOUR = Colour::BLUE_BOLD;
+constexpr auto EXEC_COLOUR = Colour::BLUE | Colour::BOLD;
 constexpr auto BAD_EXEC_COLOUR = Colour::RED;
 constexpr auto BAD_WAIT_COLOUR = Colour::RED;
 constexpr auto SIGNAL_SEND_COLOUR = Colour::MAGENTA;
@@ -25,73 +31,75 @@ constexpr auto SIGNAL_SEND_COLOUR = Colour::MAGENTA;
  * it will ask events to draw themselves when it hits the position in the line
  * where the event is supposed to appear. The event renderer gives each event
  * a set of functions it can use to draw itself via this interface. */
-class IEventRenderer {
+class IEventRenderer 
+{
 public:
     /* Moves the cursor back (to the left) by the specified number of steps. */
     virtual void backtrack(size_t steps = 1) = 0;
 
-    /* Draws a single character with the current colour. If the second param
-     * is provided, then the character is repeated the specified number of
-     * times. */
-    virtual void drawChar(Colour c, char ch, size_t count = 1) = 0;
+    /* Draws a single character with the colour. If the second param is given,
+     * then the character is repeated the specified number of times. */
+    virtual void draw_char(Colour c, char ch, size_t count = 1) = 0;
 
-    /* Draws a string with the current colour. */
-    virtual void drawString(Colour c, std::string_view str) = 0;
+    /* Draws a string with the specified colour. */
+    virtual void draw_string(Colour c, std::string_view str) = 0;
 };
 
-struct SourceLocation {
+struct SourceLocation 
+{
     std::string file;
     std::string func;
     unsigned line;
 
-    std::string toString() const;
+    std::string to_string() const;
 };
 
-struct Event {
+struct Event 
+{
     Process& owner;
-    std::unique_ptr<SourceLocation> loc; // TODO
+    std::optional<SourceLocation> location;
 
     Event(Process& owner) : owner(owner) { }
     virtual ~Event() { }
-    // TODO do i need to declare descendant functions virtual?
 
-    void setLocation(std::unique_ptr<SourceLocation> location);
-
-    virtual std::string toString() const = 0;
-    virtual void printTree(Indent indent = 0) const;
+    virtual std::string to_string() const = 0;
+    virtual void print_tree(Indent indent = 0) const;
     virtual void draw(IEventRenderer& renderer) const = 0; 
 };
 
 /* An event that causes a horizontal line to be drawn, connecting the event
  * to another path. This horizontal line could represent a branch in the fork
  * diagram, or it could represent reaping, or maybe something else? */
-struct LinkEvent : Event {
+struct LinkEvent : Event 
+{
     LinkEvent(Process& owner) : Event(owner) { }
 
-    virtual const Process& linkedPath() const = 0;
-    virtual char linkChar() const = 0;
-    virtual Colour linkColour() const { return Colour::WHITE; };
+    virtual const Process& linked_path() const = 0; // return the partner
+    virtual char link_char() const = 0; // character used to draw the path
+    virtual Colour link_colour() const { return Colour::DEFAULT; }
 };
 
 /* An event that generates a child who sends SIGCHLD to the parent */
-struct ForkEvent : LinkEvent {
+struct ForkEvent : LinkEvent 
+{
     std::shared_ptr<Process> child;
 
     ForkEvent(Process& owner, std::shared_ptr<Process> child) 
         : LinkEvent(owner), child(std::move(child)) { }
 
-    virtual std::string toString() const;
-    virtual void printTree(Indent indent) const;
+    virtual std::string to_string() const;
+    virtual void print_tree(Indent indent) const;
     virtual void draw(IEventRenderer& renderer) const;
-    virtual const Process& linkedPath() const { return *child.get(); }
-    virtual char linkChar() const { return '-'; }
+    virtual const Process& linked_path() const { return *child.get(); }
+    virtual char link_char() const { return '-'; }
 };
 
 /* Represents a wait call that hasn't yet resulted in a child getting reaped
  * (either due to not finishing yet or due to it failing). If the wait call 
  * completes and results in a reap, then this event will get removed from the 
  * process's event list and get put inside a ReapEvent instead. */
-struct WaitEvent : Event {
+struct WaitEvent : Event 
+{
     pid_t waitedId;
 
     /* This is a bit confusing, but I'd rather not add extra variables since I
@@ -113,29 +121,32 @@ struct WaitEvent : Event {
     WaitEvent(Process& owner, pid_t waitedId, bool nohang)
         : Event(owner), waitedId(waitedId), error(0), nohang(nohang) { }
 
-    virtual std::string toString() const;
+    virtual std::string to_string() const;
     virtual void draw(IEventRenderer& renderer) const;
 };
 
 /* A process is reaped by an ancestor via wait4 or waitid. */
-struct ReapEvent : LinkEvent {
+struct ReapEvent : LinkEvent 
+{
     std::shared_ptr<Process> child;
     std::unique_ptr<WaitEvent> wait; // the WaitEvent that triggered this
 
-    ReapEvent(Process& owner, std::unique_ptr<WaitEvent> wait, 
-            std::shared_ptr<Process> child);
+    ReapEvent(Process& owner, 
+              std::unique_ptr<WaitEvent> wait, 
+              std::shared_ptr<Process> child);
 
-    virtual std::string toString() const;
+    virtual std::string to_string() const;
     virtual void draw(IEventRenderer& renderer) const;
-    virtual const Process& linkedPath() const { return *child.get(); }
-    virtual char linkChar() const;
-    virtual Colour linkColour() const;
+    virtual const Process& linked_path() const { return *child.get(); }
+    virtual char link_char() const;
+    virtual Colour link_colour() const;
 };
 
 /* A process sends a signal to either itself, a process group, or it sends it
  * to another process who we couldn't find in the process tree at the time (via
  * kill, tkill or tgkill). */
-struct RaiseEvent : Event {
+struct RaiseEvent : Event 
+{
     pid_t killedId; // same meaning as PID argument of kill(2)
     int signal;
     bool toThread; // Was this signal targetted at this specific thread?
@@ -143,13 +154,14 @@ struct RaiseEvent : Event {
     RaiseEvent(Process& owner, pid_t dest, int signal, bool toThread)
         : Event(owner), killedId(dest), signal(signal), toThread(toThread) { }
 
-    virtual std::string toString() const;
+    virtual std::string to_string() const;
     virtual void draw(IEventRenderer& renderer) const;
 };
 
 /* The shared information held by the source and destination processes of a 
  * KillEvent (see the definition below). */
-struct KillInfo {
+struct KillInfo 
+{
     const Process& source;
     const Process& dest;
     int signal;
@@ -164,16 +176,17 @@ struct KillInfo {
  * the receiving process (with sender=false) and one to the sending process
  * (with sender=true). Both KillEvents out of the pair both reference the same
  * shared KillInfo. */
-struct KillEvent : LinkEvent {
+struct KillEvent : LinkEvent 
+{
     std::shared_ptr<KillInfo> info; // both the sender and receiver need this
     bool sender; // are we the sender, or the receiver?
 
     KillEvent(Process& owner, std::shared_ptr<KillInfo> info, bool sender)
         : LinkEvent(owner), info(std::move(info)), sender(sender) { }
 
-    virtual std::string toString() const;
+    virtual std::string to_string() const;
     virtual void draw(IEventRenderer& renderer) const;
-    virtual const Process& linkedPath() const;
+    virtual const Process& linked_path() const;
 
     /* We don't know whether the sender will be to the left of the receiver on
      * the diagram, or vice versa. The diagram renderer will figure out which
@@ -182,13 +195,14 @@ struct KillEvent : LinkEvent {
      * want it drawing ">>>>" as it goes left-to-right towards the receiver.
      * On the other hand, if it encounters the receiver first, then we want it
      * drawing "<<<<" as it goes left-to-right towards the sender. */
-    virtual char linkChar() const { return sender ? '>' : '<'; }
+    virtual char link_char() const { return sender ? '>' : '<'; }
 };
 
 /* A process receives a signal, which may or may not kill it. */
-struct SignalEvent : Event {
+struct SignalEvent : Event 
+{
     pid_t origin; // -1 means don't know, 0 or own pid means self
-    int signal;
+    int signal; // the value of WTERMSIG / WSTOPSIG
     bool killed;
 
     SignalEvent(Process& owner, pid_t origin, int sig, bool killed) 
@@ -197,28 +211,30 @@ struct SignalEvent : Event {
     SignalEvent(Process& owner, int sig, bool killed)
         : SignalEvent(owner, -1, sig, killed) { }
 
-    virtual std::string toString() const;
+    virtual std::string to_string() const;
     virtual void draw(IEventRenderer& renderer) const;
 };
 
 /* A process exits, causing it to terminate. */
-struct ExitEvent : Event {
-    int status;
+struct ExitEvent : Event 
+{
+    int status; // the value of WEXITSTATUS
 
     ExitEvent(Process& owner, int status) : Event(owner), status(status) { }
-    virtual std::string toString() const;
+    virtual std::string to_string() const;
     virtual void draw(IEventRenderer& renderer) const;
 };
 
 /* Describes the state of a successful or failed exec call. */
-struct ExecCall {
+struct ExecCall 
+{
     std::string file;
     int errcode; // an errno value
 
     ExecCall(std::string file, int err) 
         : file(std::move(file)) , errcode(err) { }
 
-    std::string toString(const ExecEvent& owner) const;
+    std::string to_string(const ExecEvent& owner) const;
 };
 
 /* Describes a call to exec. This struct allows us to group together strings
@@ -227,23 +243,26 @@ struct ExecCall {
  * internally implemented just by trying to execve on each directory inside
  * $PATH - so we can hide all of the failed attempts using this struct and
  * only show the successful one on the diagram. */
-struct ExecEvent : Event {
+struct ExecEvent : Event 
+{
     std::vector<ExecCall> calls;
     std::vector<std::string> args;
 
     /* This constructor initialises the event with the first exec call that has
      * been made for this event. */
-    ExecEvent(Process& owner, std::string path, 
-            std::vector<std::string> args, int err)
+    ExecEvent(Process& owner, 
+              std::string path, 
+              std::vector<std::string> args, 
+              int err)
         : Event(owner), calls{ExecCall(std::move(path), err)}, 
         args(std::move(args)) { }
 
-    virtual std::string toString() const;
-    virtual void printTree(Indent indent) const;
+    virtual std::string to_string() const;
+    virtual void print_tree(Indent indent) const;
     virtual void draw(IEventRenderer& renderer) const;
 
     /* Gets the most recent file that was execed. If there are no calls in the
-     * list than an assertion will fail. */
+     * list then an assertion will fail. */
     std::string file() const;
 
     /* Return true if this exec succeeded. An assertion fails if there were no
@@ -251,4 +270,4 @@ struct ExecEvent : Event {
     bool succeeded() const;
 };
 
-#endif /* EVENT_H */
+#endif /* FORKTRACE_EVENT_HPP */
