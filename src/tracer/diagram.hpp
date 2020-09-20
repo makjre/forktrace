@@ -29,7 +29,7 @@ public:
         SHOW_EXECS              = 1 << 0,
         SHOW_FAILED_EXECS       = 1 << 1,
         SHOW_NON_FATAL_SIGNALS  = 1 << 2,
-        SHOW_SIGNAL_SENDS       = 1 << 3, // TODO implement
+        SHOW_SIGNAL_SENDS       = 1 << 3,
     };
     static constexpr int DEFAULT_OPTS = SHOW_EXECS | SHOW_SIGNAL_SENDS;
 
