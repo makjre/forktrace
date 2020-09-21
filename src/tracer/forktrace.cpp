@@ -28,6 +28,7 @@
 #include "tracer.hpp"
 #include "process.hpp"
 #include "diagram.hpp"
+#include "scroll-view.hpp"
 
 using std::string;
 using std::string_view;

@@ -29,7 +29,8 @@ TRACER_SRCS = main.cpp \
         event.cpp \
 	ptrace.cpp \
         tracer.cpp \
-        diagram.cpp
+        diagram.cpp \
+        scroll-view.cpp
 
 TRACER_OBJS = $(patsubst %.cpp,$(BUILD_DIR)/tracer/%.o,$(TRACER_SRCS))
 

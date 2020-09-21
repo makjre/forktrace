@@ -35,23 +35,11 @@ using fmt::format;
  * unparsed and leave them to the specific action to handle. */
 enum class ProgramAction
 {
-    /* Take a command run the command line, run it from start to finish, and
-     * then exit the program (although the user can try to halt the process,
-     * in which case the RUN is cancelled and they get taken to the CMDLINE).
-     *
-     * When the run flag is specified, the argparser keeps looking for more
-     * options after it, and parsing them, but when it hits an argument that
-     * isn't an option (i.e., doesn't start with '-') (and doesn't belong to 
-     * an option) it assumes that it's hit the start of the command that needs 
-     * to be run, and leaves the rest of the parsing to the RUN action. If a
-     * separator consisting of two dashes "--" is hit, then the argparser stops
-     * anyway and leaves any remaining arguments to the RUN action. */
-    RUN,
-    /* In this case, the program just starts up the command line immediately
-     * and lets the user take it from there. This is the default behaviour of
-     * the program if no arguments are given. In this case, the argument parser
-     * parses the entire command line for options. */
-    CMDLINE,
+    /* Launch the forktrace code. A command can either be provided to forktrace
+     * or not provided. If a command is not provided, then forktrace will start
+     * up into interactive mode (with a command prompt). Otherwise it will run
+     * the provided command and print the resulting diagram. */
+    FORKTRACE,
     /* This is the mode (see inject_option_usage for a long discussion) that
      * helps modify compile commands so that the output files have extra code
      * in them that helps forktrace identify the source location of certain
@@ -207,10 +195,9 @@ private:
     /* Prints out the help for all of the program options. */
     void print_help() const;
 
-    /* Sets the program action to something. Does some checking to see if the
-     * new action clashes with the current value and throws an OptionError if
-     * it does clash. It also manages priority of the actions: so, e.g., if the
-     * current action is EXIT then that can only be replaced with ERROR. */
+    /* Sets the program action to something while managing the priorities of 
+     * actions. So, e.g., if the current action is EXIT then that can only be 
+     * replaced with ERROR. */
     void set_action(ProgramAction newAction);
 
     /* Internal parsing functions */
@@ -268,7 +255,7 @@ public:
     void exit() { set_action(ProgramAction::EXIT); }
 };
 
-ArgParser::ArgParser() : _action(ProgramAction::CMDLINE), _pos(0)
+ArgParser::ArgParser() : _action(ProgramAction::FORKTRACE), _pos(0)
 {
     string me(program_name());
     start_new_group("");
@@ -452,13 +439,9 @@ void ArgParser::print_help() const
     }
 }
 
+// TODO needed?
 void ArgParser::set_action(ProgramAction action)
 {
-    if ((action == ProgramAction::RUN && _action == ProgramAction::INJECT)
-        || (action == ProgramAction::INJECT && _action == ProgramAction::RUN))
-    {
-        throw OptionError("The run and inject options are mutually exclusive.");
-    }
     if (_action == ProgramAction::ERROR)
     {
         return; // can't override this one
@@ -580,7 +563,7 @@ bool ArgParser::parse_internal()
 
 vector<string> ArgParser::parse(const char* argv[], ProgramAction& action)
 {
-    _action = ProgramAction::CMDLINE; // default action
+    _action = ProgramAction::FORKTRACE; // default action
     _args.clear();
     _pos = 0;
 
@@ -591,7 +574,7 @@ vector<string> ArgParser::parse(const char* argv[], ProgramAction& action)
     }
     if (_args.empty())
     {
-        action = ProgramAction::CMDLINE;
+        action = _action;
         return {};
     }
 
@@ -601,12 +584,6 @@ vector<string> ArgParser::parse(const char* argv[], ProgramAction& action)
     // return the remaining arguments to the caller.
     assert(_pos <= _args.size());
     _args.erase(_args.begin(), _args.begin() + _pos);
-
-    // Set ourselves to run mode if they gave us a command to run.
-    if (_action == ProgramAction::CMDLINE && !_args.empty())
-    {
-        _action = ProgramAction::RUN;
-    }
 
     action = (success ? _action : ProgramAction::ERROR);
     return std::move(_args); // will clear _args
@@ -826,8 +803,7 @@ static bool do_all_the_things(int argc, const char** argv)
 
     switch (action)
     {
-    case ProgramAction::RUN:
-    case ProgramAction::CMDLINE:
+    case ProgramAction::FORKTRACE:
         return forktrace(std::move(remainingArgs), opts);
     case ProgramAction::INJECT:
         return handle_inject_action(std::move(remainingArgs));

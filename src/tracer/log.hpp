@@ -1,4 +1,4 @@
-/*  Copyright (C) 2021  Henry Harvey --- See LICENSE file
+/*  Copyright (C) 2020  Henry Harvey --- See LICENSE file
  *
  *  log
  *
@@ -80,7 +80,7 @@ inline void message(std::string_view message)
 }
 
 /* Some helper functions that just forward a list of variadic arguments to
- * libfmt's format function. Saves a bit of typing (I'm THAT lazy). */
+ * libfmt's format function. Saves a lot of typing. */
 template <typename ...Args>
 inline void log(std::string_view fmtStr, Args... args)
 {
