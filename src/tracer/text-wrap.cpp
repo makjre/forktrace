@@ -15,8 +15,6 @@
  */
 #include <cassert>
 
-// TODO proof-read this code. lol. kinda just wrote it all at once...
-
 #include "text-wrap.hpp"
 #include "util.hpp"
 

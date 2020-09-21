@@ -277,7 +277,7 @@ void ScrollView::draw_window(bool resized)
 
     // Redraw the pad on the screen with the updated offset etc.
     prefresh(_pad, padOffsetY, padOffsetX, padPosY, padPosX, 
-        availableHeight - 1, availableWidth - 1);
+        height - 2, width - 1); // subtract 2 from height due to row at bottom
     // Set cursor position (relative to terminal screen).
     move(_cursorY + padPosY - padOffsetY, _cursorX + padPosX - padOffsetX);
 }
