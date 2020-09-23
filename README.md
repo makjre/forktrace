@@ -41,6 +41,12 @@ can type "help" to see a list of available commands. Features include:
 2. Being able to step through one level at a time.
 3. Being able to view the diagram in a scrollable curses view.
 
+You can try the example that comes with the repo:
+
+    make
+    forktrace --help
+    forktrace ./example
+
 ### forktrace.h
 The header file "forktrace.h" used by the example program does some hackery
 so that certain syscalls are redefined so that they provide tracer with source
