@@ -1035,17 +1035,18 @@ bool Tracer::are_tracees_running() const
 
 Tracee& Tracer::add_tracee(pid_t pid, shared_ptr<Process> process)
 {
-    // Emplace returns iterator to item and good=false if key already used
-    auto [it, good] = _tracees.emplace(pid, Tracee(pid, std::move(process)));
-    if (!good)
+    auto old = _tracees.find(pid);
+    if (old != _tracees.end())
     {
         // We got a new tracee with the same PID as an existing tracee. This is
         // possible if the old tracee was orphaned and the reaper reaped it,
         // but the system recycled the PID before we learnt about it. This is
         // extremely unlikely to occur but why not be prepared for it.
-        _tracees.erase(it); // it ded
+        _tracees.erase(old); // it ded
         _recycledPIDs.push_back(pid);
     }
+    auto [it, good] = _tracees.emplace(pid, Tracee(pid, std::move(process)));
+    assert(good); // try if key was vacant
     return it->second;
 }
 
