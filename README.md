@@ -48,15 +48,14 @@ line location information. This is done by calling a dummy syscall and giving
 it the information as arguments. tracer then catches this syscall and retrieves
 the source location info from it. This is MUCH easier to implement than what
 gdb does, but requires the program to be specially compiled. "forktrace.h" is
-intended to be able to be used with any program. Just include it into the files
-where you want those syscalls defined by it to be traced.
+intended to be able to be used with any program.
+
+Just include it into the files where you want those syscalls defined by it to
+be traced. I'm working on a new feature that 'injects' this header into your
+program automatically but that's not implemented yet.
 
 ## Status
-There may be a few bugs and issues. There are a few race issues and other dodgy
-aspects, although some of them are inherent to the problem itself. I might try
-to resolve these in the future if I ever find the time and interest to revisit 
-this. For now I'm happy with the progress and proof-of-concept and will leave 
-this (maybe making changes or improvements from time to time).
+Who cares.
 
 ## Old version of this project
 This repo is a newer version of github.com/hddharvey/fdiag. The old version
