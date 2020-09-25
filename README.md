@@ -46,6 +46,12 @@ You can try the example that comes with the repo:
     make
     forktrace --help
     forktrace ./example
+    
+This is what (part of) the rendered diagram would look like:
+
+![Screenshot](screenshot.png)
+
+It's a big diagram, but the example that comes with the repo is a big example!
 
 ### forktrace.h
 The header file "forktrace.h" used by the example program does some hackery
