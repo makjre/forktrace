@@ -1046,7 +1046,7 @@ Tracee& Tracer::add_tracee(pid_t pid, shared_ptr<Process> process)
         _recycledPIDs.push_back(pid);
     }
     auto [it, good] = _tracees.emplace(pid, Tracee(pid, std::move(process)));
-    assert(good); // try if key was vacant
+    assert(good); // good is true if the key was vacant
     return it->second;
 }
 
