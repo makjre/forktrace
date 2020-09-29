@@ -225,7 +225,7 @@ bool WaitCall<Result, ZeroTheResult, ResultArgIndex>
             // wait call, we'll just let it fail.
             if (e.code() != EFAULT && e.code() != EIO) 
             {
-                throw e;
+                throw; // rethrow it
             }
             _oldData.reset();
             _result = nullptr;
@@ -474,7 +474,7 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
         // as per usual and let the exec call fail.
         if (e.code() != EFAULT && e.code() != EIO) 
         {
-            throw e;
+            throw; // rethrow it
         }
     }
 
