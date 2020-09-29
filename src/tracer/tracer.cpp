@@ -278,7 +278,8 @@ bool WaitCall<Result, ZeroTheResult, ResultArgIndex>
         }
         // Restore the syscall arg just to be safe. Might not be necessary
         // depending on the syscall calling convention for this architecture.
-        if (!set_syscall_arg(pid, 0, ResultArgIndex)) {
+        if (!set_syscall_arg(pid, 0, ResultArgIndex)) 
+        {
             return false;
         }
     }
