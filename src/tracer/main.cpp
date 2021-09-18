@@ -15,7 +15,6 @@
 
 #include "util.hpp"
 #include "log.hpp"
-#include "inject.hpp"
 #include "forktrace.hpp"
 #include "text-wrap.hpp"
 #include "terminal.hpp"
@@ -29,32 +28,6 @@ using std::function;
 using std::optional;
 using std::unique_ptr;
 using fmt::format;
-
-/* Returned by argument parser to determine what course of action we should be
- * taking. Depending on the action, the argument parser may leave some args
- * unparsed and leave them to the specific action to handle. */
-enum class ProgramAction
-{
-    /* Launch the forktrace code. A command can either be provided to forktrace
-     * or not provided. If a command is not provided, then forktrace will start
-     * up into interactive mode (with a command prompt). Otherwise it will run
-     * the provided command and print the resulting diagram. */
-    FORKTRACE,
-    /* This is the mode (see inject_option_usage for a long discussion) that
-     * helps modify compile commands so that the output files have extra code
-     * in them that helps forktrace identify the source location of certain
-     * system calls. When the inject flag is specified, the argument parser 
-     * stops. No further options are parsed since they are assumed to either
-     * be the names of files to inject, or arguments to the compiler command
-     * to inject into. All remaining parsing is left to the INJECT code. */
-    INJECT,
-    /* There was an error parsing the command line arguments (so the program
-     * should exit with an error status, e.g., 1). */
-    ERROR,
-    /* The program should just exit straight away (this would happen for the
-     * help option). The program should not exit with an error status. */
-    EXIT,
-};
 
 /******************************************************************************
  * OPTION CLASSES (these represent command-line options)
@@ -160,10 +133,7 @@ struct OptionGroup
  *****************************************************************************/
 
 /* Provides a nice way to parse command line options automatically. Allows us
- * to register our options with it via callbacks and whatnot. Exceptions are
- * the options determining ProgramAction (-i, -r, --inject, --run): these are
- * hardcoded into the parser (those options affect the structure of the command
- * line itself, and I don't want to over-engineer this by abstracting that). 
+ * to register our options with it via callbacks and whatnot.  
  * The parser also hardcodes the options for help (-h and --help). */
 class ArgParser
 {
@@ -171,12 +141,8 @@ private:
     /* Our list of options (split into groups). Could try to use a map<> or
      * something but who cares about efficient argument parsing! */
     vector<OptionGroup> _groups;
-    /* See the enum definition. At each point in the argument parsing, this is
-     * the current action that the program is determined to take based on what
-     * we've seen so far. This forms somewhat of a state machine as we're doing
-     * the parsing (e.g., the value dictates what is valid after it). The flags
-     * that determine the program action get special treatment by the parser.*/
-    ProgramAction _action;
+    /* Should we exit the program after parsing the arguments (e.g., help flag) */
+    bool _doExit;
     /* Excludes argv[0]. We're going to be maintaining pointers into this as we
      * move along and parse everything, so better not resize or modfiy it!. */
     vector<string> _args;
@@ -194,11 +160,6 @@ private:
 
     /* Prints out the help for all of the program options. */
     void print_help() const;
-
-    /* Sets the program action to something while managing the priorities of 
-     * actions. So, e.g., if the current action is EXIT then that can only be 
-     * replaced with ERROR. */
-    void set_action(ProgramAction newAction);
 
     /* Internal parsing functions */
     bool parse_long_flag(string flag);
@@ -244,25 +205,24 @@ public:
 
     /* Parses the provided argv array (a null-terminated array of arguments,
      * including argv[0]). argv must contain >= 1 arguments. When done parsing,
-     * the function stores the action that the program should take from then
-     * on (which could be ProgramAction::ERROR if there was an error parsing
-     * the arguments) and returns a vector of the remaining arguments to be
-     * parsed (the parser may stop parsing before the end of argv depending on
-     * the action -- see the comments for enum ProgramAction). */
-    vector<string> parse(const char* argv[], ProgramAction& action);
+     * the function returns false if there was an error parsing the arguments. 
+     * Left-over arguments are stored in the provided vector (someone else can
+     * parse these non-flag arguments). */
+    bool parse(const char* argv[], vector<string>& remainingArgs);
+
+    /* Returns true if the program should exit */
+    bool should_exit() { return _doExit; }
 
     /* Option callbacks can call this if they don't want the program to run. */
-    void exit() { set_action(ProgramAction::EXIT); }
+    void schedule_exit() { _doExit = true; }
 };
 
-ArgParser::ArgParser() : _action(ProgramAction::FORKTRACE), _pos(0)
+ArgParser::ArgParser() : _doExit(false), _pos(0)
 {
     string me(program_name());
     start_new_group("");
     add("help", 'h', "", "displays this help message",
-        [&]{ print_help(); set_action(ProgramAction::EXIT); });
-    add("inject", 'i', "", "type '" + me + " -i' for more information",
-        [&]{ set_action(ProgramAction::INJECT); });
+        [&]{ print_help(); schedule_exit(); });
 }
 
 optional<string> ArgParser::current() const
@@ -382,9 +342,6 @@ void ArgParser::print_help() const
         << "Directly run a program in forktrace (instant mode):\n"
         << "  " << me << " [OPTIONS...] [--] program [ARGS...]\n"
         << "\n"
-        << "Compile a program so that " << me << " can get more information:\n"
-        << "  " << me << " [OPTIONS...] -i [FILES...] -- compiler {ARGS...}\n"
-        << "\n"
         << "Use '--' to force " << me << " to stop parsing flags.\n";
 
     size_t width = 0, height = 0;
@@ -437,20 +394,6 @@ void ArgParser::print_help() const
         }
         std::cerr << '\n';
     }
-}
-
-// TODO needed?
-void ArgParser::set_action(ProgramAction action)
-{
-    if (_action == ProgramAction::ERROR)
-    {
-        return; // can't override this one
-    }
-    if (_action == ProgramAction::EXIT)
-    {
-        return; // next highest priority
-    }
-    _action = action;
 }
 
 bool ArgParser::parse_long_flag(string flag)
@@ -548,22 +491,14 @@ bool ArgParser::parse_internal()
         {
             return true; // not a flag - stop parsing here
         }
-
-        if (_action == ProgramAction::INJECT)
-        {
-            // If we hit an inject flag, then we'll let the INJECT code handle
-            // the rest of the program's arguments.
-            next(); // skip the inject flag
-            return true;
-        }
     } 
     while (next());
     return true;
 }
 
-vector<string> ArgParser::parse(const char* argv[], ProgramAction& action)
+bool ArgParser::parse(const char* argv[], vector<string>& remainingArgs)
 {
-    _action = ProgramAction::FORKTRACE; // default action
+    _doExit = false;
     _args.clear();
     _pos = 0;
 
@@ -574,145 +509,18 @@ vector<string> ArgParser::parse(const char* argv[], ProgramAction& action)
     }
     if (_args.empty())
     {
-        action = _action;
-        return {};
+        return true;
     }
 
     bool success = parse_internal();
 
-    // Erase the arguments up until where we finished parsing so that we can
-    // return the remaining arguments to the caller.
+    // Erase all the arguments up to where we finished parsing so that
+    // we can return those leftover arguments to the caller.
     assert(_pos <= _args.size());
     _args.erase(_args.begin(), _args.begin() + _pos);
+    remainingArgs = std::move(_args);
 
-    action = (success ? _action : ProgramAction::ERROR);
-    return std::move(_args); // will clear _args
-}
-
-/******************************************************************************
- * INJECT ACTION
- *****************************************************************************/
-
-/* Print the description of the inject option. */
-static void inject_option_usage()
-{
-    string programName(program_name());
-    std::cerr << "usage: " << programName
-        << " [OPTIONS...] -i [FILES...] -- compiler {ARGS...}\n\n";
-
-    string text1 = 
-    "The inject option takes a compiler command and runs it, while injecting "
-    "code into each of the source files so that " + programName + " can "
-    "trace the source locations where all the events happen (yes, programs "
-    "like gdb don't need to do this, but doing what gdb does takes a lot of "
-    "effort to implement)."
-    "\n\n"
-    "The injected code is done with #includes, so will only work on the "
-    "source files. This option only supports C/C++. By default, the inject "
-    "option will search for files in the compiler arguments with the "
-    "following extensions:";
-    string text2 = ".c .h .cpp .hpp .cc .hh .cxx .hxx";
-    string text3 =
-    "Note that this option will not modify the specified source files (not "
-    "even temporarily). It uses some ptrace magic to alter what the compiler "
-    "reads."
-    "\n\n"
-    "The inject option should be separated from the compiler command with two "
-    "dashes ('--'). In between the -i option and these dashes, you can insert "
-    "names of files (in the compiler command) that should be injected. If any "
-    "files are specified, then they override the default behaviour seen above."
-    "\n\n"
-    "The injections use preprocessor macros to insert a special syscall with "
-    "an invalid syscall number after each of the relevant functions which "
-    + programName + " can latch onto. This syscall will silently fail in "
-    "normal operation. Since ptracing is on a per-thread basis, this works "
-    "for multi-threaded programs."
-    "\n\n"
-    "The following syscalls (actually, the C library wrappers for them) are "
-    "traced:";
-    string text4 =
-    "fork, kill, raise, tkill, tgkill, wait, waitpid, waitid, wait3, " 
-    "wait4, execv, execvp, execve, execl, execlp, execle, execvpe";
-
-    std::cerr << wrap_text_to_screen(text1, true, 0, 79) << '\n' 
-        << wrap_text_to_screen(text2, false, 4, 79) << '\n'
-        << wrap_text_to_screen(text3, true, 0, 79) << '\n' 
-        << wrap_text_to_screen(text4, false, 4, 79) << '\n';
-}
-
-/* Searches the arguments of the provided compiler argv list for files that
- * contain C/C++ file extensions (which we will inject into) and return a list
- * of those items. Will skip argv[0] when searching (i.e., the compiler). */
-static vector<string> find_inject_files(const vector<string>& argv)
-{
-    vector<string_view> exts = {
-        ".c", ".h", ".cpp", ".hpp", ".cc", ".hh", ".cxx", ".hxx"
-    };
-    vector<string> files;
-    for (size_t i = 1; i < argv.size(); ++i)
-    {
-        for (string_view ext : exts)
-        {
-            if (ends_with(argv.at(i), ext))
-            {
-                files.push_back(argv.at(i));
-            }
-        }
-    }
-    return files;
-}
-
-/* Called when forktrace was called with the inject option. args must contain
- * all of the command-line arguments after the -i flag. On succes, the inject 
- * action is done. On failure, false is returned. */
-static bool handle_inject_action(vector<string> args)
-{
-    // Split the remaining arguments using the separator into two vectors
-    // usage: forktrace -i [FILES...] -- compiler {ARGS...}
-    // We'll expect the compiler command to have at least one argument
-    auto sep = std::find(args.begin(), args.end(), "--");
-    if (sep == args.end())
-    {
-        inject_option_usage();
-        return false;
-    }
-    vector<string> files(args.begin(), sep);
-    vector<string> cmd(sep + 1, args.end());
-
-    // We expect the compile command to have at least one parameter
-    if (cmd.size() < 2) // code further down relies on this
-    {
-        inject_option_usage();
-        return false;
-    }
-    for (auto it = files.begin(); it != files.end();)
-    {
-        if (!it->empty() && (*it)[0] == '-')
-        {
-            warning("'{}' looks like it's supposed to be an option, but "
-                "it's being interpreted as a file.", *it);
-        }
-        // can skip argv[0] since we checked earlier that cmd.size() >= 2
-        if (std::find(cmd.begin() + 1, cmd.end(), *it) == cmd.end())
-        {
-            warning("File '{}' was listed to be injected but wasn't found "
-                "in the compiler's arguments. Ignoring.", *it);
-            it = files.erase(it); // Iterator now points to next item.
-            if (files.empty())
-            {
-                error("No files to inject. Stopping.");
-                return false;
-            }
-            continue;
-        }
-        ++it;
-    }
-    if (files.empty())
-    {
-        files = find_inject_files(cmd); // search based on file extensions
-    }
-    // Now pass the parsed arguments off for the magic to happen
-    return do_inject(std::move(files), std::move(cmd));
+    return success;
 }
 
 /******************************************************************************
@@ -742,10 +550,10 @@ static void register_options(ArgParser& parser, Forktrace::Options& opts)
         [&]{ opts.reaper = false; }
     );
     parser.add("status", "STATUS", "diagnose a wait(2) child status",
-        [&](string s) { diagnose_status(parse_number<int>(s)); parser.exit(); }
+        [&](string s) { diagnose_status(parse_number<int>(s)); parser.schedule_exit(); }
     );
     parser.add("syscall", "NUMBER", "print info about a syscall number",
-        [&](string s) { print_syscall(parse_number<int>(s)); parser.exit(); }
+        [&](string s) { print_syscall(parse_number<int>(s)); parser.schedule_exit(); }
     );
 
     parser.start_new_group("Diagram options");
@@ -787,40 +595,29 @@ static void register_options(ArgParser& parser, Forktrace::Options& opts)
     );
 }
 
-static bool do_all_the_things(int argc, const char** argv)
-{
-    if (!init_log(argv[0])) // makes sure argv[0] isn't null :-)
-    {
-        return false;
-    }
-
-    Forktrace::Options opts;
-    ArgParser parser;
-    register_options(parser, opts);
-
-    ProgramAction action;
-    vector<string> remainingArgs = parser.parse(argv, action);
-
-    switch (action)
-    {
-    case ProgramAction::FORKTRACE:
-        return forktrace(std::move(remainingArgs), opts);
-    case ProgramAction::INJECT:
-        return handle_inject_action(std::move(remainingArgs));
-    case ProgramAction::EXIT:
-        return true;
-    case ProgramAction::ERROR:
-        return false;
-    default:
-        assert(!"Unreachable");
-    }
-}
-
 int main(int argc, const char** argv) 
 {
     try
     {
-        return do_all_the_things(argc, argv) ? 0 : 1;
+        if (!init_log(argv[0])) // makes sure argv[0] isn't null :-)
+        {
+            return 1;
+        }
+
+        Forktrace::Options opts;
+        ArgParser parser;
+        register_options(parser, opts);
+
+        vector<string> remainingArgs;
+        if (!parser.parse(argv, remainingArgs))
+        {
+            return 1;
+        }
+        if (parser.should_exit())
+        {
+            return 0;
+        }
+        return forktrace(std::move(remainingArgs), opts) ? 0 : 1;
     }
     catch (const std::exception& e)
     {

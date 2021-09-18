@@ -19,7 +19,6 @@ TRACER_SRCS = main.cpp \
 	system.cpp \
 	util.cpp \
         log.cpp \
-        inject.cpp \
         text-wrap.cpp \
         forktrace.cpp \
         terminal.cpp \
