@@ -53,11 +53,11 @@ private:
      *      (2) If a single command name begins with 'prefix', pick that.
      *
      * Otherwise, an error is printed and null is returned. */
-    const Command* find_command(std::string_view prefix) const;
+    const Command* _find_command(std::string_view prefix) const;
 
     /* The internal functions for the built-in help command */
-    void help_handler(std::vector<std::string> args) const;
-    void print_help(const Group& group) const;
+    void _help_handler(std::vector<std::string> args) const;
+    void _print_help(const Group& group) const;
     
 public:
     CommandParser();

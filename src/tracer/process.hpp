@@ -56,8 +56,8 @@ private:
     std::optional<SourceLocation> _location; // current source location
 
     /* Private functions, described in source file */
-    void add_event(std::unique_ptr<Event> ev, bool consumeLoc = false);
-    const ExecEvent* most_recent_exec(int startIndex = -1) const;
+    void _add_event(std::unique_ptr<Event> ev, bool consumeLoc = false);
+    const ExecEvent* _most_recent_exec(int startIndex = -1) const;
 
 public:
     /* Call this if the process has no (traced) parent and if we don't know its

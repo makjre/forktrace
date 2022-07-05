@@ -86,11 +86,11 @@ CommandParser::CommandParser()
     start_new_group("");
     add("help", "[COMMAND]", 
         "shows help about a command, or all if none specified", 
-        [&](vector<string> args) { help_handler(args); });
+        [&](vector<string> args) { _help_handler(args); });
 }
 
 const CommandParser::Command* 
-CommandParser::find_command(string_view prefix) const
+CommandParser::_find_command(string_view prefix) const
 {
     vector<string> names;
     vector<const Command*> matches;
@@ -122,7 +122,7 @@ CommandParser::find_command(string_view prefix) const
     return matches.front();
 }
 
-void CommandParser::print_help(const CommandParser::Group& group) const
+void CommandParser::_print_help(const CommandParser::Group& group) const
 {
     if (!group.name.empty())
     {
@@ -163,7 +163,7 @@ void CommandParser::print_help(const CommandParser::Group& group) const
     }
 }
 
-void CommandParser::help_handler(vector<string> args) const
+void CommandParser::_help_handler(vector<string> args) const
 {
     if (args.size() > 1)
     {
@@ -172,10 +172,10 @@ void CommandParser::help_handler(vector<string> args) const
     }
     if (args.size() == 1)
     {
-        const Command* command = find_command(args[0]);
+        const Command* command = _find_command(args[0]);
         if (!command)
         {
-            return; // find_command prints an error for us
+            return; // _find_command prints an error for us
         }
         string cmd = colour(Colour::BOLD, command->name);
         std::cerr << format("{} {}\n", cmd, command->params);
@@ -185,7 +185,7 @@ void CommandParser::help_handler(vector<string> args) const
     std::cerr << '\n';
     for (const Group& group : _groups)
     {
-        print_help(group);
+        _print_help(group);
     }
     std::cerr << '\n';
 }
@@ -466,7 +466,7 @@ bool CommandParser::do_command(string_view thePrompt)
     {
         return true;
     }
-    const Command* cmd = find_command(tokens[0]); // prints errors for us
+    const Command* cmd = _find_command(tokens[0]); // prints errors for us
     if (!cmd)
     {
         return true;

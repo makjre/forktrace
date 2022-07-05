@@ -198,7 +198,7 @@ void Drawer::draw_string(Colour c, string_view str)
  * could be found (i.e., end of event list was reached). If the next event
  * in the path is a KillEvent, then this will update the killPartner field
  * for that path (see above). */
-int Diagram::get_next_event(const Process& process, size_t start) 
+int Diagram::_get_next_event(const Process& process, size_t start) 
 {
     for (size_t i = start; i < process.event_count(); ++i) 
     {
@@ -255,11 +255,11 @@ int Diagram::get_next_event(const Process& process, size_t start)
 }
 
 /* Helper functions to create nodes. startPath returns the first node in
- * a path. continue_path returns a node that continues the path of prevNode
+ * a path. _continue_path returns a node that continues the path of prevNode
  * but otherwise does nothing. getSuccessor returns a node after prevNode
  * that consumes the next event in the path. */
 
-Diagram::Node Diagram::get_successor(const Diagram::Node& prev) 
+Diagram::Node Diagram::_get_successor(const Diagram::Node& prev) 
 {
     const Process& process = prev.process;
     if (prev.next == -1) 
@@ -267,17 +267,17 @@ Diagram::Node Diagram::get_successor(const Diagram::Node& prev)
         return Node(process, nullptr, -1);
     }
     return Node(process, &process.event(prev.next), 
-        get_next_event(process, prev.next + 1));
+        _get_next_event(process, prev.next + 1));
 }
 
-Diagram::Node Diagram::continue_path(const Diagram::Node& prev) 
+Diagram::Node Diagram::_continue_path(const Diagram::Node& prev) 
 {
     return Node(prev.process, nullptr, prev.next);
 }
 
-Diagram::Node Diagram::start_path(const Process& process) 
+Diagram::Node Diagram::_start_path(const Process& process) 
 {
-    return Node(process, nullptr, get_next_event(process, 0));
+    return Node(process, nullptr, _get_next_event(process, 0));
 }
 
 /* Uses a recursive algorithm to allocate all of the processes in the tree
@@ -289,7 +289,7 @@ Diagram::Node Diagram::start_path(const Process& process)
 // TODO really sus to have pointers into a C++ container (it relies on the
 // container not being modified during the lifetime of the pointers). I'll
 // restructure this at some point I think.
-void Diagram::allocate_process_to_lane(vector<vector<Path*>>& lanes, 
+void Diagram::_allocate_process_to_lane(vector<vector<Path*>>& lanes, 
                                        const Process& process)
 {
     assert(_paths.find(&process) != _paths.end());
@@ -344,14 +344,14 @@ void Diagram::allocate_process_to_lane(vector<vector<Path*>>& lanes,
         const Event* e = &process.event(i);
         if (auto forkEvent = dynamic_cast<const ForkEvent*>(e)) 
         {
-            allocate_process_to_lane(lanes, *forkEvent->child.get());
+            _allocate_process_to_lane(lanes, *forkEvent->child.get());
         }
     }
 }
 
 /* Checks if the path for this process is ready to terminate on this line
  * (based on what happened on the previous line). */
-bool Diagram::path_ready_to_end(const vector<Node>& prevLine, 
+bool Diagram::_path_ready_to_end(const vector<Node>& prevLine, 
                                 const Process& process) const
 {
     for (const Node& node : prevLine) 
@@ -371,7 +371,7 @@ bool Diagram::path_ready_to_end(const vector<Node>& prevLine,
  * path that the linking line for the LinkEvent ends on (a ForkEvent will
  * return null since the process of the child path does not exist in the
  * previous line). */
-const Process* Diagram::do_link_event(vector<Node>& curLine, 
+const Process* Diagram::_do_link_event(vector<Node>& curLine, 
                                       int lineNum, 
                                       Path& path, 
                                       const Node& prevNode, 
@@ -386,8 +386,8 @@ const Process* Diagram::do_link_event(vector<Node>& curLine,
         assert(_paths.find(&other) == _paths.end());
         _paths[&other] = Path(lineNum);
         assert(_paths.find(&other) != _paths.end());
-        curLine.push_back(get_successor(prevNode));
-        curLine.push_back(start_path(other));
+        curLine.push_back(_get_successor(prevNode));
+        curLine.push_back(_start_path(other));
         return nullptr;
     }
 
@@ -395,13 +395,13 @@ const Process* Diagram::do_link_event(vector<Node>& curLine,
     {
         // This event will remove an existing path from this line
         assert(_paths.find(&other) != _paths.end());
-        if (!path_ready_to_end(prevLine, other)) 
+        if (!_path_ready_to_end(prevLine, other)) 
         {
-            curLine.push_back(continue_path(prevNode));
+            curLine.push_back(_continue_path(prevNode));
             return nullptr;
         }
         _paths[&other].endLine = lineNum;
-        curLine.push_back(get_successor(prevNode));
+        curLine.push_back(_get_successor(prevNode));
         return &other;
     }
 
@@ -411,7 +411,7 @@ const Process* Diagram::do_link_event(vector<Node>& curLine,
         if (partner == _paths.end()) 
         {
             // Our partner's path does not exist yet, so we wait
-            curLine.push_back(continue_path(prevNode));
+            curLine.push_back(_continue_path(prevNode));
             return nullptr;
         }
         if (!path.killPartner) 
@@ -420,20 +420,20 @@ const Process* Diagram::do_link_event(vector<Node>& curLine,
             // back to null, which means we're both ready (they would
             // have to be to our left in the diagram).
             assert(!partner->second.killPartner);
-            curLine.push_back(get_successor(prevNode));
+            curLine.push_back(_get_successor(prevNode));
             return nullptr;
         }
         if (partner->second.killPartner != &prevNode.process) 
         {
             // The partner path isn't ready to connect with us yet
-            curLine.push_back(continue_path(prevNode));
+            curLine.push_back(_continue_path(prevNode));
             return nullptr;
         }
         // Okay, both paths are ready to link up. We'll set both paths'
         // killPartners back to null, since neither are looking for a
         // connection any more at this point.
         partner->second.killPartner = path.killPartner = nullptr;
-        curLine.push_back(get_successor(prevNode));
+        curLine.push_back(_get_successor(prevNode));
         return &other;
     }
 
@@ -443,7 +443,7 @@ const Process* Diagram::do_link_event(vector<Node>& curLine,
 /* Generates the next line of the diagram. Uses all of the lines so far 
  * (in `_lines`) to help figure this out. Will return false if there are
  * no lines left to build, and appends to `_lines` otherwise. */
-bool Diagram::build_next_line() 
+bool Diagram::_build_next_line() 
 {
     assert(_lines.size() > 0);
     vector<Node> curLine;
@@ -489,7 +489,7 @@ bool Diagram::build_next_line()
         {
             if (path.endLine == -1 || path.endLine >= lineNum) 
             {
-                curLine.push_back(continue_path(prevNode)); 
+                curLine.push_back(_continue_path(prevNode)); 
             }
             continue; // Otherwise, let the process die
         }
@@ -501,13 +501,13 @@ bool Diagram::build_next_line()
                 // We're currently embedded inside a connecting line between 
                 // two lanes, so put off this event so that we don't have to 
                 // deal with overlapping lines between lanes.
-                curLine.push_back(continue_path(prevNode));
+                curLine.push_back(_continue_path(prevNode));
                 continue;
             }
-            eventEnd = do_link_event(curLine, lineNum, path, prevNode, *link);
+            eventEnd = _do_link_event(curLine, lineNum, path, prevNode, *link);
             continue;
         }
-        curLine.push_back(get_successor(prevNode));
+        curLine.push_back(_get_successor(prevNode));
     }
 
     if (curLine.empty()) 
@@ -519,7 +519,7 @@ bool Diagram::build_next_line()
 }
 
 /* Draw a single line of the diagram. `lineNum` is indexed from 0. */
-void Diagram::draw_line(const vector<Node>& line, size_t lineNum) 
+void Diagram::_draw_line(const vector<Node>& line, size_t lineNum) 
 {
     _renderer->start_line(lineNum);
     // If we're currently in the middle of drawing a dashed line to another
@@ -618,11 +618,11 @@ void Diagram::draw_line(const vector<Node>& line, size_t lineNum)
 
 /* Draw the entire diagram. Call this only after all of the lines have been
  * built and all of the lanes have been allocated. */
-void Diagram::draw() 
+void Diagram::_draw() 
 {
     for (size_t i = 0; i < _lines.size(); ++i) 
     {
-        draw_line(_lines.at(i), i);
+        _draw_line(_lines.at(i), i);
     }
 }
 
@@ -648,18 +648,18 @@ void Diagram::redraw()
     _paths.clear();
     _lines.clear();
     _paths[&_leader] = Path(0);
-    _lines.push_back({ start_path(_leader) });
+    _lines.push_back({ _start_path(_leader) });
     
     // Figure out what nodes go in each line of the diagram
-    while (build_next_line()) { } 
+    while (_build_next_line()) { } 
 
     // Recursively allocates all the paths to a lane
     vector<vector<Path*>> lanes { vector<Path*>() };
-    allocate_process_to_lane(lanes, _leader);
+    _allocate_process_to_lane(lanes, _leader);
 
     _renderer->start(lanes.size(), _lines.size());
     _laneCount = lanes.size();
-    draw(); 
+    _draw(); 
 }
 
 bool Diagram::truncated() const

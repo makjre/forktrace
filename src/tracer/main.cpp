@@ -148,27 +148,27 @@ private:
     vector<string> _args;
     size_t _pos; // index of current argument within the vector
 
-    /* Helps us move along the arguments list. current() returns the current
-     * one and next() moves us to the next one (and returns it). Both of these
+    /* Helps us move along the arguments list. _current() returns the current
+     * one and _next() moves us to the next one (and returns it). Both of these
      * return nullopt if the end of the list of arguments has been passed. */
-    optional<string> current() const;
-    optional<string> next();
+    optional<string> _current() const;
+    optional<string> _next();
 
     /* Helps us find options using different names. Returns null if none. */
-    const Option* find(string_view name) const;
-    const Option* find(char shortName) const;
+    const Option* _find(string_view name) const;
+    const Option* _find(char shortName) const;
 
     /* Prints out the help for all of the program options. */
-    void print_help() const;
+    void _print_help() const;
 
     /* Internal parsing functions */
-    bool parse_long_flag(string flag);
-    bool parse_short_flags(string flags);
-    bool parse_flag(string flag);
+    bool _parse_long_flag(string flag);
+    bool _parse_short_flags(string flags);
+    bool _parse_flag(string flag);
 
     /* Internal version of parse() that does all the work. This assumes that
      * _args and _pos have been set up and that _args is non-empty. */
-    bool parse_internal();
+    bool _parse_internal();
 
 public:
     ArgParser();
@@ -222,22 +222,22 @@ ArgParser::ArgParser() : _doExit(false), _pos(0)
     string me(program_name());
     start_new_group("");
     add("help", 'h', "", "displays this help message",
-        [&]{ print_help(); schedule_exit(); });
+        [&]{ _print_help(); schedule_exit(); });
 }
 
-optional<string> ArgParser::current() const
+optional<string> ArgParser::_current() const
 {
     return _pos >= _args.size() 
         ? optional<string>() : optional<string>(_args[_pos]);
 }
 
-optional<string> ArgParser::next()
+optional<string> ArgParser::_next()
 {
     _pos++;
-    return current();
+    return _current();
 }
 
-const Option* ArgParser::find(string_view name) const
+const Option* ArgParser::_find(string_view name) const
 {
     for (const OptionGroup& group : _groups)
     {
@@ -252,7 +252,7 @@ const Option* ArgParser::find(string_view name) const
     return nullptr;
 }
 
-const Option* ArgParser::find(char shortName) const
+const Option* ArgParser::_find(char shortName) const
 {
     for (const OptionGroup& group : _groups)
     {
@@ -285,8 +285,8 @@ void ArgParser::add(string_view name,
                           function<void()> handler)
 {
     assert(is_valid_name(name));
-    assert(!find(name));
-    assert(!find(shortName));
+    assert(!_find(name));
+    assert(!_find(shortName));
     assert(!_groups.empty());
     vector<unique_ptr<Option>>& options = _groups.back().options;
     options.push_back(std::make_unique<Option0>(
@@ -312,8 +312,8 @@ void ArgParser::add(string_view name,
                           function<void(string)> handler)
 {
     assert(is_valid_name(name));
-    assert(!find(name));
-    assert(!find(shortName));
+    assert(!_find(name));
+    assert(!_find(shortName));
     assert(!_groups.empty());
     vector<unique_ptr<Option>>& options = _groups.back().options;
     options.push_back(std::make_unique<Option1>(
@@ -332,7 +332,7 @@ void ArgParser::add(string_view name,
     add(name, '\0', param, help, handler);
 }
 
-void ArgParser::print_help() const
+void ArgParser::_print_help() const
 {
     string_view me = program_name();
     std::cerr 
@@ -396,7 +396,7 @@ void ArgParser::print_help() const
     }
 }
 
-bool ArgParser::parse_long_flag(string flag)
+bool ArgParser::_parse_long_flag(string flag)
 {
     assert(starts_with(flag, "--"));
     flag = flag.substr(2);
@@ -409,7 +409,7 @@ bool ArgParser::parse_long_flag(string flag)
         flag = flag.substr(0, equalsPos);
     }
 
-    const Option* opt = find(flag);
+    const Option* opt = _find(flag);
     if (!opt)
     {
         error("The \"--{}\" flag doesn't exist.", flag);
@@ -419,12 +419,12 @@ bool ArgParser::parse_long_flag(string flag)
     return true;
 }
 
-bool ArgParser::parse_short_flags(string flags)
+bool ArgParser::_parse_short_flags(string flags)
 {
     assert(starts_with(flags, "-"));
     for (size_t i = 1; i < flags.size(); ++i)
     {
-        const Option* opt = find(flags[i]);
+        const Option* opt = _find(flags[i]);
         if (!opt)
         {
             error("The '-{}' flag doesn't exist.", flags[i]);
@@ -441,18 +441,18 @@ bool ArgParser::parse_short_flags(string flags)
     return true;
 }
 
-bool ArgParser::parse_flag(string flag)
+bool ArgParser::_parse_flag(string flag)
 {
     assert(starts_with(flag, "-"));
     try
     {
         if (starts_with(flag, "--"))
         {
-            return parse_long_flag(std::move(flag));
+            return _parse_long_flag(std::move(flag));
         }
         else if (flag.size() > 1)
         {
-            return parse_short_flags(std::move(flag));
+            return _parse_short_flags(std::move(flag));
         }
         else
         {
@@ -468,21 +468,21 @@ bool ArgParser::parse_flag(string flag)
 }
 
 /* This function assumes _args is non-empty and _pos has been set to 0. */
-bool ArgParser::parse_internal()
+bool ArgParser::_parse_internal()
 {
     do
     {
-        string arg = current().value();
+        string arg = _current().value();
         // The separator forces us to stop parsing command line options.
         if (arg == "--")
         {
-            next(); // skip the separator
+            _next(); // skip the separator
             return true;
         }
 
         if (starts_with(arg, "-"))
         {
-            if (!parse_flag(std::move(arg)))
+            if (!_parse_flag(std::move(arg)))
             {
                 return false; // invalid option
             }
@@ -492,7 +492,7 @@ bool ArgParser::parse_internal()
             return true; // not a flag - stop parsing here
         }
     } 
-    while (next());
+    while (_next());
     return true;
 }
 
@@ -512,7 +512,7 @@ bool ArgParser::parse(const char* argv[], vector<string>& remainingArgs)
         return true;
     }
 
-    bool success = parse_internal();
+    bool success = _parse_internal();
 
     // Erase all the arguments up to where we finished parsing so that
     // we can return those leftover arguments to the caller.

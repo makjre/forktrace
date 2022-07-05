@@ -31,7 +31,7 @@ void process_assert(bool cond, std::string_view fmt, Args... args)
 Process::Process(pid_t pid, const shared_ptr<Process>& parent)
     : _pid(pid), _parent(parent), _state(State::ALIVE), _killed(false)
 {
-    const ExecEvent* lastExec = parent->most_recent_exec();
+    const ExecEvent* lastExec = parent->_most_recent_exec();
     if (!lastExec) 
     {
         _initialName = parent->_initialName;
@@ -49,7 +49,7 @@ Process::Process(pid_t pid, const shared_ptr<Process>& parent)
  * become invalid if the event is removed from our list. If startIndex is
  * negative, then we'll search all events. Otherwise, we'll start the reverse
  * search from the event preceding the specified index. */
-const ExecEvent* Process::most_recent_exec(int startIndex) const 
+const ExecEvent* Process::_most_recent_exec(int startIndex) const 
 {
     if (_events.empty() || startIndex == 0) 
     {
@@ -77,10 +77,10 @@ const ExecEvent* Process::most_recent_exec(int startIndex) const
  * process has already ended. If `consumeLocation` is true, then the current
  * source location is **moved** into the provided event if it exists. Events
  * can only be added if the process is alive. */
-void Process::add_event(unique_ptr<Event> event, bool consumeLocation) 
+void Process::_add_event(unique_ptr<Event> event, bool consumeLocation) 
 {
     process_assert(_state == State::ALIVE,
-        "add_event({}) called when state != ALIVE", event->to_string());
+        "_add_event({}) called when state != ALIVE", event->to_string());
     if (_location.has_value() && consumeLocation)
     {
         log("{} @ {}", event->to_string(), _location->to_string());
@@ -116,7 +116,7 @@ void Process::notify_waiting(pid_t waitedId, bool nohang)
             }
         }
     }
-    add_event(make_unique<WaitEvent>(*this, waitedId, nohang), true);
+    _add_event(make_unique<WaitEvent>(*this, waitedId, nohang), true);
 }
 
 void Process::notify_failed_wait(int error) 
@@ -173,7 +173,7 @@ void Process::notify_reaped(shared_ptr<Process> child)
 void Process::notify_forked(shared_ptr<Process> child) 
 {
     // consumeLocation=true (forktrace.h updates source location for forks)
-    add_event(make_unique<ForkEvent>(*this, std::move(child)), true);
+    _add_event(make_unique<ForkEvent>(*this, std::move(child)), true);
 }
 
 void Process::notify_exec(string file, vector<string> args, int errcode) 
@@ -182,7 +182,7 @@ void Process::notify_exec(string file, vector<string> args, int errcode)
     {
         // We have no exec events so far - don't have to worry about merging
         // consumeLocation=true (forktrace.h updates source location for execs)
-        add_event(make_unique<ExecEvent>(
+        _add_event(make_unique<ExecEvent>(
             *this, std::move(file), std::move(args), errcode), true);
         return;
     }
@@ -192,7 +192,7 @@ void Process::notify_exec(string file, vector<string> args, int errcode)
     if (!event || event->succeeded() || event->args != args) 
     {
         // the last event wasn't a failed exec event, so don't merge
-        add_event(make_unique<ExecEvent>(
+        _add_event(make_unique<ExecEvent>(
             *this, std::move(file), std::move(args), errcode), true);
         return;
     }
@@ -201,7 +201,7 @@ void Process::notify_exec(string file, vector<string> args, int errcode)
         || event->args != args) 
     {
         // the last exec was for a different program or args - don't merge
-        add_event(make_unique<ExecEvent>(
+        _add_event(make_unique<ExecEvent>(
             *this, std::move(file), std::move(args), errcode), true);
         return;
     }
@@ -235,8 +235,8 @@ void Process::notify_ended(int status)
 
     if (WIFEXITED(status)) 
     {
-        add_event(make_unique<ExitEvent>(*this, WEXITSTATUS(status)));
-        // Must set this *after* calling add_event since it only allows events
+        _add_event(make_unique<ExitEvent>(*this, WEXITSTATUS(status)));
+        // Must set this *after* calling _add_event since it only allows events
         // to be added to processes that are State::ALIVE (good).
         _state = State::ZOMBIE;
     } 
@@ -259,8 +259,8 @@ void Process::notify_ended(int status)
         }
 
         // killed=True since we know this signal ended the process.
-        add_event(make_unique<SignalEvent>(*this, WTERMSIG(status), true));
-        _state = State::ZOMBIE; // must go after add_event
+        _add_event(make_unique<SignalEvent>(*this, WTERMSIG(status), true));
+        _state = State::ZOMBIE; // must go after _add_event
         _killed = true;
     }
 }
@@ -268,7 +268,7 @@ void Process::notify_ended(int status)
 void Process::notify_signaled(pid_t sender, int signal) 
 {
     // killed=False so far (we don't know if this signal killed yet)
-    add_event(make_unique<SignalEvent>(*this, sender, signal, false));
+    _add_event(make_unique<SignalEvent>(*this, sender, signal, false));
 }
 
 /* This is a static member function */
@@ -287,12 +287,12 @@ void Process::notify_sent_signal(pid_t killedId,
         // Both processes get a handle to the shared kill information. The 
         // source process consumes their source location (since forktrace.h
         // will update location when kill/tkill/tkill is called).
-        source.add_event(make_unique<KillEvent>(source, info, true), true);
+        source._add_event(make_unique<KillEvent>(source, info, true), true);
 
         // Some signals like SIGKILL will kill the process instantly, so the 
         // death event will already be there. In that case, we want to put the 
         // kill event before it, so we'll swap them out. In both cases, we
-        // add the event directly (eschewing add_event) since we don't want
+        // add the event directly (eschewing _add_event) since we don't want
         // to log the KillEvent twice (the source already did that just above).
         if (dest->dead())
         {
@@ -312,7 +312,7 @@ void Process::notify_sent_signal(pid_t killedId,
     {
         // We're not able to draw a clean line between two processes in the
         // tree, so we'll just use a RaiseEvent instead.
-        source.add_event(
+        source._add_event(
             make_unique<RaiseEvent>(source, killedId, signal, toThread), true);
     }
 }
@@ -358,7 +358,7 @@ string_view Process::state() const
 
 string Process::command_line(int eventIndex) const 
 {
-    if (const ExecEvent* lastExec = most_recent_exec(eventIndex))
+    if (const ExecEvent* lastExec = _most_recent_exec(eventIndex))
     {
         const vector<string>& args = lastExec->args;
         return format("{} [ {} ]", lastExec->call().file, join(args));

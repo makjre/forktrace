@@ -83,7 +83,7 @@ private:
     size_t _height;
     std::unique_ptr<Cell[]> _buf; // stored as sequence of rows
 
-    Cell& at(size_t x, size_t y) { return _buf[y * _width + x]; }
+    Cell& _at(size_t x, size_t y) { return _buf[y * _width + x]; }
 
 public:
     Window(size_t width, size_t height, Colour defaultColour = Colour::WHITE);

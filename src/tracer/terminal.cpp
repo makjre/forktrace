@@ -80,7 +80,7 @@ void Window::draw_char(size_t x, size_t y, char ch, size_t count)
     assert(x + count <= _width); // hopefully we made diagram wide enough
     for (size_t i = 0; i < count; ++i) 
     {
-        at(x + i, y) = Cell(_current, ch);
+        _at(x + i, y) = Cell(_current, ch);
     }
 }
 
@@ -90,7 +90,7 @@ void Window::draw_string(size_t x, size_t y, string_view str)
     assert(x + str.size() <= _width); // hopefully we made diagram wide enough
     for (size_t i = 0; i < str.size(); ++i) 
     {
-        at(x + i, y) = Cell(_current, str[i]);
+        _at(x + i, y) = Cell(_current, str[i]);
     }
 }
 

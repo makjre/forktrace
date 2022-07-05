@@ -119,26 +119,26 @@ private:
     std::vector<pid_t> _recycledPIDs;
 
     /* Private functions, see source file */
-    void collect_orphans();
-    bool are_tracees_running() const;
-    bool all_tracees_dead() const;
-    bool resume(Tracee&);
-    bool wait_for_stop(Tracee&, int&);
-    void handle_wait_notification(pid_t, int);
-    void handle_wait_notification(Tracee&, int);
-    void handle_syscall_entry(Tracee&, int, size_t[]);
-    void handle_syscall_exit(Tracee&);
-    void handle_fork(Tracee&);
-    void handle_failed_fork(Tracee&);
-    void handle_exec(Tracee&, const char*, const char**);
-    void handle_kill(Tracee&, pid_t, int, bool);
-    void handle_new_location(Tracee&, unsigned, const char*, const char*);
-    void handle_signal_stop(Tracee&, int);
-    void handle_stopped(Tracee&, int);
-    Tracee& add_tracee(pid_t, std::shared_ptr<Process>);
-    void expect_ended(Tracee&);
-    void initiate_wait(Tracee&, std::unique_ptr<BlockingCall>);
-    void on_sent_signal(Tracee&, pid_t, int, bool);
+    void _collect_orphans();
+    bool _are_tracees_running() const;
+    bool _all_tracees_dead() const;
+    bool _resume(Tracee&);
+    bool _wait_for_stop(Tracee&, int&);
+    void _handle_wait_notification(pid_t, int);
+    void _handle_wait_notification(Tracee&, int);
+    void _handle_syscall_entry(Tracee&, int, size_t[]);
+    void _handle_syscall_exit(Tracee&);
+    void _handle_fork(Tracee&);
+    void _handle_failed_fork(Tracee&);
+    void _handle_exec(Tracee&, const char*, const char**);
+    void _handle_kill(Tracee&, pid_t, int, bool);
+    void _handle_new_location(Tracee&, unsigned, const char*, const char*);
+    void _handle_signal_stop(Tracee&, int);
+    void _handle_stopped(Tracee&, int);
+    Tracee& _add_tracee(pid_t, std::shared_ptr<Process>);
+    void _expect_ended(Tracee&);
+    void _initiate_wait(Tracee&, std::unique_ptr<BlockingCall>);
+    void _on_sent_signal(Tracee&, pid_t, int, bool);
 
 public:
     Tracer() { }

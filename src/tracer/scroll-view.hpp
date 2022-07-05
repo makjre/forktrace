@@ -34,16 +34,16 @@ private:
     KeyCallback _keyHandler;
 
     /* Private functions, see source file. */
-    void draw_window(bool resized = true);
-    void build_image(const Window& image);
-    void cleanup();
+    void _draw_window(bool resized = true);
+    void _build_image(const Window& image);
+    void _cleanup();
 
 public:
     /* The constructor brings up the curses view. */
     ScrollView(const Window& window, 
                std::string_view helpMessage, 
                KeyCallback onKey);
-    ~ScrollView() { cleanup(); }
+    ~ScrollView() { _cleanup(); }
 
     /* Allows the caller to set the messages stored at the two lines of text
      * at the top of the window. asserts that y == 0 || y == 1. */

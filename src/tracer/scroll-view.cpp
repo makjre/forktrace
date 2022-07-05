@@ -56,7 +56,7 @@ int get_colour(Colour c)
     }
 }
 
-void ScrollView::draw_window(bool resized)
+void ScrollView::_draw_window(bool resized)
 {
     int width, height;
     getmaxyx(stdscr, height, width); // macro
@@ -173,7 +173,7 @@ void ScrollView::draw_window(bool resized)
 void ScrollView::run() 
 {
     assert(_pad && _padWidth > 0 && _padHeight > 0);
-    draw_window(true);
+    _draw_window(true);
     while (_running) 
     {
         int c = getch();
@@ -181,11 +181,11 @@ void ScrollView::run()
         {
             _keyHandler(*this, c);
         }
-        draw_window(c == KEY_RESIZE);
+        _draw_window(c == KEY_RESIZE);
     }
 }
 
-void ScrollView::build_image(const Window& image) 
+void ScrollView::_build_image(const Window& image) 
 {
     if (_pad) 
     {
@@ -225,11 +225,11 @@ void ScrollView::build_image(const Window& image)
 
 void ScrollView::update(const Window& image) 
 {
-    build_image(image);
-    draw_window(true);
+    _build_image(image);
+    _draw_window(true);
 }
 
-void ScrollView::cleanup() 
+void ScrollView::_cleanup() 
 {
     if (_pad) 
     {
@@ -255,7 +255,7 @@ ScrollView::ScrollView(const Window& image,
     }
     if (!init_curses_colour()) 
     {
-        cleanup();
+        _cleanup();
         throw runtime_error("Failed to initialise curses colours.");
     }
     
@@ -267,7 +267,7 @@ ScrollView::ScrollView(const Window& image,
     } 
     else 
     {
-        cleanup();
+        _cleanup();
         throw runtime_error("BALLS");
     }
 
@@ -277,7 +277,7 @@ ScrollView::ScrollView(const Window& image,
     } 
     catch (const std::exception& e) 
     {
-        cleanup();
+        _cleanup();
         throw e;
     }
 }

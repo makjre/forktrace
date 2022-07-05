@@ -146,11 +146,11 @@ protected:
 
     /* Retrieve the result and return value of the wait call. Return false if
      * the tracee died and throw an exception if some error occurred. */
-    bool get_result(pid_t pid, Result& result, size_t& retval);
+    bool _get_result(pid_t pid, Result& result, size_t& retval);
 
     /* Calling these will update the process tree if necessary */
-    void on_success(Tracer& tracer, Tracee& tracee, pid_t reaped);
-    void on_failure(Tracer& tracer, Tracee& tracee, int error);
+    void _on_success(Tracer& tracer, Tracee& tracee, pid_t reaped);
+    void _on_failure(Tracer& tracer, Tracee& tracee, int error);
 };
 
 class Wait4Call : public WaitCall<int, false, 1> 
@@ -248,7 +248,7 @@ bool WaitCall<Result, ZeroTheResult, ResultArgIndex>
 
 template <class Result, bool ZeroTheResult, int ResultArgIndex>
 bool WaitCall<Result, ZeroTheResult, ResultArgIndex>
-::get_result(pid_t pid, Result& result, size_t& retval) 
+::_get_result(pid_t pid, Result& result, size_t& retval) 
 {
     // If _result and _oldData are null, then that indicates that the address
     // specified by the tracee for the result is invalid and thus the system
@@ -288,7 +288,7 @@ bool WaitCall<Result, ZeroTheResult, ResultArgIndex>
 
 template <class Result, bool ZeroTheResult, int ResultArgIndex>
 void WaitCall<Result, ZeroTheResult, ResultArgIndex>
-::on_success(Tracer& tracer, Tracee& tracee, pid_t chosen)
+::_on_success(Tracer& tracer, Tracee& tracee, pid_t chosen)
 {
     auto it = tracer._tracees.find(chosen);
     if (it == tracer._tracees.end())
@@ -307,7 +307,7 @@ void WaitCall<Result, ZeroTheResult, ResultArgIndex>
 
 template <class Result, bool ZeroTheResult, int ResultArgIndex>
 void WaitCall<Result, ZeroTheResult, ResultArgIndex>
-::on_failure(Tracer& tracer, Tracee& tracee, int error)
+::_on_failure(Tracer& tracer, Tracee& tracee, int error)
 {
     tracee.process->notify_failed_wait(error);
 }
@@ -316,17 +316,17 @@ bool Wait4Call::finalise(Tracer& tracer, Tracee& tracee)
 {
     int status;
     size_t retval;
-    if (!get_result(tracee.pid, status, retval)) 
+    if (!_get_result(tracee.pid, status, retval)) 
     {
         return false;
     }
     if ((pid_t)retval > 0 && (WIFEXITED(status) || WIFSIGNALED(status))) 
     {
-        on_success(tracer, tracee, retval);
+        _on_success(tracer, tracee, retval);
     } 
     else if ((pid_t)retval < 0) 
     {
-        on_failure(tracer, tracee, -(int)retval);
+        _on_failure(tracer, tracee, -(int)retval);
     }
     return true;
 }
@@ -335,7 +335,7 @@ bool WaitIDCall::finalise(Tracer& tracer, Tracee& tracee)
 {
     siginfo_t info;
     size_t retval;
-    if (!get_result(tracee.pid, info, retval)) 
+    if (!_get_result(tracee.pid, info, retval)) 
     {
         return false;
     }
@@ -347,11 +347,11 @@ bool WaitIDCall::finalise(Tracer& tracer, Tracee& tracee)
         || info.si_code == CLD_KILLED
         || info.si_code == CLD_DUMPED)) 
     {
-        on_success(tracer, tracee, info.si_pid);
+        _on_success(tracer, tracee, info.si_pid);
     } 
     else if ((int)retval < 0) 
     {
-        on_failure(tracer, tracee, -(int)retval);
+        _on_failure(tracer, tracee, -(int)retval);
     }
     return true;
 }
@@ -361,14 +361,14 @@ bool WaitIDCall::finalise(Tracer& tracer, Tracee& tracee)
  * then the failure will be ignored. For any other cause of failure, this 
  * function will exit the program - terminating all tracees (due to the
  * PTRACE_O_EXITKILL option). Leaves reseting tracee.syscall to the caller. */
-void Tracer::handle_failed_fork(Tracee& tracee) 
+void Tracer::_handle_failed_fork(Tracee& tracee) 
 {
     /* We've reached a syscall-exit-stop for the fork call, let's check the
      * return value and determine the cause of failure. */
     size_t retval;
     if (!get_syscall_ret(tracee.pid, retval)) 
     {
-        expect_ended(tracee);
+        _expect_ended(tracee);
         return;
     }
     
@@ -380,7 +380,7 @@ void Tracer::handle_failed_fork(Tracee& tracee)
          * will then retry the fork when it next hits syscall-entry-stop, in
          * which case we'll get another go at this. */
         log("{} fork interrupted (to be resumed)", tracee.pid);
-        resume(tracee);
+        _resume(tracee);
         return;
     }
 
@@ -395,10 +395,10 @@ void Tracer::handle_failed_fork(Tracee& tracee)
 }
 
 /* Also called for fork-like clones. Doesn't work with vfork yet :-( */
-void Tracer::handle_fork(Tracee& tracee) 
+void Tracer::_handle_fork(Tracee& tracee) 
 {
     int status;
-    if (!resume(tracee) || !wait_for_stop(tracee, status))
+    if (!_resume(tracee) || !_wait_for_stop(tracee, status))
     {
         return;
     }
@@ -411,7 +411,7 @@ void Tracer::handle_fork(Tracee& tracee)
                 "Expected syscall-exit-stop after bad fork.");
         }
         tracee.syscall = SYSCALL_NONE;
-        handle_failed_fork(tracee);
+        _handle_failed_fork(tracee);
         return;
     }
 
@@ -420,18 +420,18 @@ void Tracer::handle_fork(Tracee& tracee)
     {
         if (errno == ESRCH) 
         {
-            expect_ended(tracee);
+            _expect_ended(tracee);
             return;
         }
         throw SystemError(errno, "ptrace(PTRACE_GETEVENTMSG)");
     }
 
     auto process = std::make_shared<Process>(childId, tracee.process);
-    Tracee& child = add_tracee(childId, process); // will be in stopped state
+    Tracee& child = _add_tracee(childId, process); // will be in stopped state
     tracee.process->notify_forked(process);
 
     // Our ptrace config causes SIGSTOP to be raised in the child after fork
-    if (!wait_for_stop(child, status))
+    if (!_wait_for_stop(child, status))
     {
         return;
     }
@@ -442,7 +442,7 @@ void Tracer::handle_fork(Tracee& tracee)
     }
 
     // Resume parent until the syscall-exit-stop
-    if (!resume(tracee) || !wait_for_stop(tracee, status)) 
+    if (!_resume(tracee) || !_wait_for_stop(tracee, status)) 
     {
         return;
     }
@@ -455,7 +455,7 @@ void Tracer::handle_fork(Tracee& tracee)
     tracee.syscall = SYSCALL_NONE;
 }
 
-void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv) 
+void Tracer::_handle_exec(Tracee& tracee, const char* path, const char** argv) 
 {
     vector<string> args;
     string file;
@@ -464,7 +464,7 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
         if (!copy_string_array_from_tracee(tracee.pid, argv, args)
             || !copy_string_from_tracee(tracee.pid, path, file))
         {
-            expect_ended(tracee);
+            _expect_ended(tracee);
             return;
         }
     } 
@@ -488,7 +488,7 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
 
     // resume and expect the exec event if the exec succeeded
     int status;
-    if (!resume(tracee) || !wait_for_stop(tracee, status)) 
+    if (!_resume(tracee) || !_wait_for_stop(tracee, status)) 
     {
         return;
     }
@@ -506,7 +506,7 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
         size_t retval;
         if (!get_syscall_ret(tracee.pid, retval)) 
         {
-            expect_ended(tracee);
+            _expect_ended(tracee);
             return;
         }
 
@@ -515,7 +515,7 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
         return;
     }
 
-    if (!resume(tracee) || !wait_for_stop(tracee, status)) 
+    if (!_resume(tracee) || !_wait_for_stop(tracee, status)) 
     {
         return;
     }
@@ -534,17 +534,17 @@ void Tracer::handle_exec(Tracee& tracee, const char* path, const char** argv)
     }
 }
 
-void Tracer::initiate_wait(Tracee& tracee, unique_ptr<BlockingCall> wait) 
+void Tracer::_initiate_wait(Tracee& tracee, unique_ptr<BlockingCall> wait) 
 {
     if (!wait->prepare(*this, tracee)) 
     {
-        expect_ended(tracee);
+        _expect_ended(tracee);
         return;
     }
     tracee.blockingCall = std::move(wait);
 }
 
-void Tracer::on_sent_signal(Tracee& tracee, 
+void Tracer::_on_sent_signal(Tracee& tracee, 
                             pid_t target, 
                             int signal, 
                             bool toThread)
@@ -560,17 +560,17 @@ void Tracer::on_sent_signal(Tracee& tracee,
 }
 
 /* For kill/tgkill/tkill */
-void Tracer::handle_kill(Tracee& tracee, 
+void Tracer::_handle_kill(Tracee& tracee, 
                          pid_t target, 
                          int signal, 
                          bool toThread)
 {
-    if (!resume(tracee))
+    if (!_resume(tracee))
     {
         return;
     }
 
-    // we won't use the wait_for_stop helper function here, since we need a bit
+    // we won't use the _wait_for_stop helper function here, since we need a bit
     // more manual control to handle the case where the tracee SIGKILLs itself.
     int status;
     if (waitpid(tracee.pid, &status, 0) == -1) 
@@ -600,9 +600,9 @@ void Tracer::handle_kill(Tracee& tracee,
             // kill syscall and it actually killing the process, but this is
             // good enough for me I think). Unfortunately, PTRACE_GETSIGINFO is
             // of no use here, since it can't track SIGKILL'ed processes. TODO
-            on_sent_signal(tracee, target, signal, toThread);
+            _on_sent_signal(tracee, target, signal, toThread);
         }
-        handle_wait_notification(tracee, status);
+        _handle_wait_notification(tracee, status);
         assert(tracee.state == Tracee::DEAD);
         return;
     }
@@ -616,20 +616,20 @@ void Tracer::handle_kill(Tracee& tracee,
 
     size_t retval;
     if (!get_syscall_ret(tracee.pid, retval)) {
-        expect_ended(tracee);
+        _expect_ended(tracee);
         return;
     }
 
     if (signal == 0 || retval != 0) 
     {
-        resume(tracee); // ignore no signal or a failed kill et al
+        _resume(tracee); // ignore no signal or a failed kill et al
         return;
     }
-    on_sent_signal(tracee, target, signal, toThread);
+    _on_sent_signal(tracee, target, signal, toThread);
 }
 
 /* Handle a source location update from tracee using our fake syscall */
-void Tracer::handle_new_location(Tracee& tracee,
+void Tracer::_handle_new_location(Tracee& tracee,
                                  unsigned line, 
                                  const char* function, 
                                  const char* file) 
@@ -638,19 +638,19 @@ void Tracer::handle_new_location(Tracee& tracee,
     location.line = line;
     if (!copy_string_from_tracee(tracee.pid, function, location.func)) 
     {
-        expect_ended(tracee);
+        _expect_ended(tracee);
         return;
     }
     if (!copy_string_from_tracee(tracee.pid, file, location.file)) 
     {
-        expect_ended(tracee);
+        _expect_ended(tracee);
         return;
     }
     tracee.process->update_location(std::move(location));
-    resume(tracee); // continue until syscall-exit-stop
+    _resume(tracee); // continue until syscall-exit-stop
 }
 
-void Tracer::handle_syscall_entry(Tracee& tracee, 
+void Tracer::_handle_syscall_entry(Tracee& tracee, 
                                   int syscall,
                                   size_t args[SYS_ARG_MAX])
 {
@@ -665,19 +665,19 @@ void Tracer::handle_syscall_entry(Tracee& tracee,
             break; // we'll block these syscalls
 
         case SYSCALL_FORK:
-            handle_fork(tracee);
+            _handle_fork(tracee);
             return;
 
         case SYSCALL_EXECVE:
-            handle_exec(tracee, (const char*)args[0], (const char**)args[1]);
+            _handle_exec(tracee, (const char*)args[0], (const char**)args[1]);
             return;
 
         case SYSCALL_EXECVEAT:
-            handle_exec(tracee, (const char*)args[1], (const char**)args[2]);
+            _handle_exec(tracee, (const char*)args[1], (const char**)args[2]);
             return;
 
         case SYSCALL_WAIT4:
-            initiate_wait(tracee, std::make_unique<Wait4Call>(
+            _initiate_wait(tracee, std::make_unique<Wait4Call>(
                 (pid_t)args[0],
                 (int*)args[1],
                 (int)args[2]
@@ -685,7 +685,7 @@ void Tracer::handle_syscall_entry(Tracee& tracee,
             return;
 
         case SYSCALL_WAITID:
-            initiate_wait(tracee, std::make_unique<WaitIDCall>(
+            _initiate_wait(tracee, std::make_unique<WaitIDCall>(
                 (idtype_t)args[0],
                 (id_t)args[1],
                 (siginfo_t*)args[2],
@@ -698,25 +698,25 @@ void Tracer::handle_syscall_entry(Tracee& tracee,
             // Then that is very much *unlike* a fork...?!?!?!
             if (IS_CLONE_LIKE_A_FORK(args)) 
             {
-                handle_fork(tracee);
+                _handle_fork(tracee);
                 return;
             } 
             break; // we'll cancel the syscall
 
         case SYSCALL_KILL: 
-            handle_kill(tracee, (pid_t)args[0], (int)args[1], false);
+            _handle_kill(tracee, (pid_t)args[0], (int)args[1], false);
             return;
 
         case SYSCALL_TKILL:
-            handle_kill(tracee, (pid_t)args[0], (int)args[1], true);
+            _handle_kill(tracee, (pid_t)args[0], (int)args[1], true);
             return;
 
         case SYSCALL_TGKILL:
-            handle_kill(tracee, (pid_t)args[1], (int)args[2], true);
+            _handle_kill(tracee, (pid_t)args[1], (int)args[2], true);
             return;
 
         case SYSCALL_FAKE:
-            handle_new_location(
+            _handle_new_location(
                 tracee,
                 (unsigned)args[0],
                 (const char*)args[1],
@@ -725,17 +725,17 @@ void Tracer::handle_syscall_entry(Tracee& tracee,
             return;
 
         default:
-            resume(tracee);
+            _resume(tracee);
             return;
     }
 
     error("Tracee {} tried to execute banned syscall {}.", 
         tracee.pid, get_syscall_name(syscall));
     set_syscall(tracee.pid, SYSCALL_NONE); // make the syscall fail
-    resume(tracee);
+    _resume(tracee);
 }
 
-void Tracer::handle_syscall_exit(Tracee& tracee)
+void Tracer::_handle_syscall_exit(Tracee& tracee)
 {
     if (tracee.blockingCall != nullptr) 
     {
@@ -743,7 +743,7 @@ void Tracer::handle_syscall_exit(Tracee& tracee)
         // call that we were trying to keep track of - so finish that.
         if (!tracee.blockingCall->finalise(*this, tracee)) 
         {
-            expect_ended(tracee);
+            _expect_ended(tracee);
             return;
         }
         verbose("{} exited blocking syscall {}", 
@@ -755,11 +755,11 @@ void Tracer::handle_syscall_exit(Tracee& tracee)
         verbose("{} exited syscall {}", 
             tracee.pid, get_syscall_name(tracee.syscall));
     }
-    resume(tracee);
+    _resume(tracee);
     tracee.syscall = SYSCALL_NONE;
 }
 
-void Tracer::handle_signal_stop(Tracee& tracee, int signal)
+void Tracer::_handle_signal_stop(Tracee& tracee, int signal)
 {
     if (tracee.signal != 0)
     {
@@ -783,7 +783,7 @@ void Tracer::handle_signal_stop(Tracee& tracee, int signal)
     {
         if (errno == ESRCH)
         {
-            expect_ended(tracee);
+            _expect_ended(tracee);
             return;
         }
         throw SystemError(errno, "ptrace(PTRACE_GETSIGINFO)");
@@ -793,7 +793,7 @@ void Tracer::handle_signal_stop(Tracee& tracee, int signal)
     tracee.signal = signal; // make sure it's delivered when next resumed
 }
 
-void Tracer::handle_stopped(Tracee& tracee, int status)
+void Tracer::_handle_stopped(Tracee& tracee, int status)
 {
     assert(WIFSTOPPED(status));
     if (IS_SYSCALL_EVENT(status))
@@ -804,14 +804,14 @@ void Tracer::handle_stopped(Tracee& tracee, int status)
             size_t args[SYS_ARG_MAX];
             if (!which_syscall(tracee.pid, syscall, args))
             {
-                expect_ended(tracee);
+                _expect_ended(tracee);
                 return;
             }
-            handle_syscall_entry(tracee, syscall, args);
+            _handle_syscall_entry(tracee, syscall, args);
         }
         else
         {
-            handle_syscall_exit(tracee); // resets to SYSCALL_NONE for us
+            _handle_syscall_exit(tracee); // resets to SYSCALL_NONE for us
         }
     }
     else if (IS_FORK_EVENT(status) 
@@ -825,11 +825,11 @@ void Tracer::handle_stopped(Tracee& tracee, int status)
     }
     else
     {
-        handle_signal_stop(tracee, WSTOPSIG(status));
+        _handle_signal_stop(tracee, WSTOPSIG(status));
     }
 }
 
-void Tracer::handle_wait_notification(Tracee& tracee, int status)
+void Tracer::_handle_wait_notification(Tracee& tracee, int status)
 {
     if (tracee.state == Tracee::DEAD)
     {
@@ -863,14 +863,14 @@ void Tracer::handle_wait_notification(Tracee& tracee, int status)
             "Tracee hasn't ended but also hasn't stopped...");
     }
     tracee.state = Tracee::STOPPED;
-    handle_stopped(tracee, status);
+    _handle_stopped(tracee, status);
 }
 
 /******************************************************************************
  * HELPER FUNCTIONS FOR TRACING
  *****************************************************************************/
 
-bool Tracer::wait_for_stop(Tracee& tracee, int& status)
+bool Tracer::_wait_for_stop(Tracee& tracee, int& status)
 {
     if (waitpid(tracee.pid, &status, 0) == -1) 
     {
@@ -886,11 +886,11 @@ bool Tracer::wait_for_stop(Tracee& tracee, int& status)
         tracee.state = Tracee::STOPPED;
         return true;
     }
-    handle_wait_notification(tracee, status);
+    _handle_wait_notification(tracee, status);
     return false;
 }
 
-bool Tracer::resume(Tracee& tracee)
+bool Tracer::_resume(Tracee& tracee)
 {
     if (tracee.state != Tracee::STOPPED)
     {
@@ -913,9 +913,9 @@ bool Tracer::resume(Tracee& tracee)
 
 
 /* Calls waitpid on the tracee and makes sure that it's either exited or been
- * killed, then handles the exit/kill event with handle_wait_notification. 
+ * killed, then handles the exit/kill event with _handle_wait_notification. 
  * If the tracee hasn't ended, then a BadTraceError is thrown. */
-void Tracer::expect_ended(Tracee& tracee)
+void Tracer::_expect_ended(Tracee& tracee)
 {
     // TODO maybe use WNOHANG? Maybe loop until we get an exit event in case
     // multiple were queued up (is that even possible?). Grrr so much of this
@@ -938,14 +938,14 @@ void Tracer::expect_ended(Tracee& tracee)
     }
 
     // this will handle the event for us and set tracee's state to DEAD
-    handle_wait_notification(tracee, status);
+    _handle_wait_notification(tracee, status);
 }
 
 /******************************************************************************
  * OTHER METHODS
  *****************************************************************************/
 
-void Tracer::collect_orphans() 
+void Tracer::_collect_orphans() 
 {
     while (!_orphans.empty())
     {
@@ -983,7 +983,7 @@ shared_ptr<Process> Tracer::start(string_view program, vector<string> argv)
     pid_t pid = start_tracee(program, argv); // may throw
     auto process = std::make_shared<Process>(pid, program, argv);
     Leader& leader = _leaders[pid] = Leader();
-    add_tracee(pid, process);
+    _add_tracee(pid, process);
 
     while (!leader.execed)
     {
@@ -994,9 +994,9 @@ shared_ptr<Process> Tracer::start(string_view program, vector<string> argv)
         {
             throw std::runtime_error("Tracee ended before it could exec.");
         }
-        if (!resume(it->second))
+        if (!_resume(it->second))
         {
-            expect_ended(it->second);
+            _expect_ended(it->second);
             throw std::runtime_error("Tracee failed to exec.");
         }
         int status;
@@ -1004,13 +1004,13 @@ shared_ptr<Process> Tracer::start(string_view program, vector<string> argv)
         {
             throw SystemError(errno, "waitpid");
         }
-        handle_wait_notification(it->second, status);
+        _handle_wait_notification(it->second, status);
     }
 
     return process;
 }
 
-bool Tracer::all_tracees_dead() const
+bool Tracer::_all_tracees_dead() const
 {
     for (auto& pair : _tracees)
     {
@@ -1022,7 +1022,7 @@ bool Tracer::all_tracees_dead() const
     return true;
 }
 
-bool Tracer::are_tracees_running() const
+bool Tracer::_are_tracees_running() const
 {
     for (auto& pair : _tracees)
     {
@@ -1034,7 +1034,7 @@ bool Tracer::are_tracees_running() const
     return false;
 }
 
-Tracee& Tracer::add_tracee(pid_t pid, shared_ptr<Process> process)
+Tracee& Tracer::_add_tracee(pid_t pid, shared_ptr<Process> process)
 {
     auto old = _tracees.find(pid);
     if (old != _tracees.end())
@@ -1063,14 +1063,14 @@ bool Tracer::step()
         }
         for (auto& [pid, tracee] : _tracees) 
         {
-            resume(tracee);
+            _resume(tracee);
         }
-        collect_orphans();
+        _collect_orphans();
     }
 
     // We only want to wait if we know there's something to wait for. If we're
     // not careful with that, then we could end up blocking forever.
-    if (are_tracees_running())
+    if (_are_tracees_running()) // FIXME: mutex should be locked?!
     {
         int status;
         pid_t pid;
@@ -1086,20 +1086,20 @@ bool Tracer::step()
                 continue;
             }
 
-            handle_wait_notification(it->second, status);
-            collect_orphans();
+            _handle_wait_notification(it->second, status);
+            _collect_orphans();
 
-            if (all_tracees_dead())
+            if (_all_tracees_dead())
             {
                 break;
             }
-            if (!are_tracees_running())
+            if (!_are_tracees_running())
             {
                 return true;
             }
         }
     }
-    return !_tracees.empty();
+    return !_tracees.empty(); // FIXME: mutex should be locked?!
 }
 
 void Tracer::notify_orphan(pid_t pid)
@@ -1111,7 +1111,7 @@ void Tracer::notify_orphan(pid_t pid)
 void Tracer::check_orphans()
 {
     std::scoped_lock<std::mutex> guard(_lock);
-    collect_orphans(); // don't want to expose unlocked version publicly
+    _collect_orphans(); // don't want to expose unlocked version publicly
 }
 
 void Tracer::nuke() 

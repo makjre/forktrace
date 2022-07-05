@@ -93,19 +93,19 @@ private:
     std::vector<std::vector<Node>> _lines;
 
     /* Private functions, see source file. */
-    int get_next_event(const Process& process, size_t start);
-    Node get_successor(const Node& prevNode);
-    Node continue_path(const Node& prevNode);
-    Node start_path(const Process& process);
-    void allocate_process_to_lane(std::vector<std::vector<Path*>>& lanes, 
+    int _get_next_event(const Process& process, size_t start);
+    Node _get_successor(const Node& prevNode);
+    Node _continue_path(const Node& prevNode);
+    Node _start_path(const Process& process);
+    void _allocate_process_to_lane(std::vector<std::vector<Path*>>& lanes, 
             const Process& process);
-    bool path_ready_to_end(const std::vector<Node>& prevLine,
+    bool _path_ready_to_end(const std::vector<Node>& prevLine,
             const Process& process) const;
-    const Process* do_link_event(std::vector<Node>& curLine, int lineNum, 
+    const Process* _do_link_event(std::vector<Node>& curLine, int lineNum, 
             Path& path, const Node& prevNode, const LinkEvent& event);
-    bool build_next_line();
-    void draw_line(const std::vector<Node>& line, size_t lineNum);
-    void draw();
+    bool _build_next_line();
+    void _draw_line(const std::vector<Node>& line, size_t lineNum);
+    void _draw();
 
 public:
     /* This will build the diagram. Once this constructor returns, the diagram
